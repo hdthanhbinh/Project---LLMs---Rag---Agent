@@ -1,0 +1,11 @@
+streamlit
+pdfplumber
+python-docx
+langchain
+langchain-community
+langchain-huggingface
+langchain-ollama
+faiss-cpu
+sentence-transformers
+ollama
+torch --index-url https://download.pytorch.org/whl/cpu
