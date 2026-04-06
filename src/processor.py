@@ -1,34 +1,94 @@
 from pathlib import Path
+from datetime import datetime
+import argparse
+from collections import defaultdict
 
-from langchain_community.document_loaders import Docx2txtLoader, PDFPlumberLoader, TextLoader
+from langchain_community.document_loaders import PDFPlumberLoader
+from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
-def load_document(file_path):
-	"""Load a document file and return a list of LangChain Document objects."""
-	path = Path(file_path)
-	suffix = path.suffix.lower()
+def _load_docx(file_path: Path):
+	"""Load a DOCX file into a list of LangChain Document objects."""
+	# DOCX parsing with python-docx.
+	try:
+		import docx  # python-docx
+	except ImportError as exc:
+		raise ImportError(
+			"DOCX support requires 'python-docx'. "
+			"Install with: pip install python-docx"
+		) from exc
 
-	if suffix == ".pdf":
-		loader = PDFPlumberLoader(str(path))
-	elif suffix == ".docx":
-		loader = Docx2txtLoader(str(path))
-	elif suffix == ".txt":
-		loader = TextLoader(str(path), encoding="utf-8")
+	doc = docx.Document(str(file_path))
+	parts = []
+
+	for paragraph in doc.paragraphs:
+		text = (paragraph.text or "").strip()
+		if text:
+			parts.append(text)
+
+	for table in doc.tables:
+		for row in table.rows:
+			cells = [(cell.text or "").strip() for cell in row.cells]
+			cells = [cell for cell in cells if cell]
+			if cells:
+				parts.append("\t".join(cells))
+
+	content = "\n".join(parts).strip()
+	return [Document(page_content=content, metadata={"source": str(file_path)})]
+
+
+def load_document(file_paths):
+	"""Load one or many files and return a flat list of Document objects."""
+	if isinstance(file_paths, (str, Path)):
+		paths = [file_paths]
 	else:
-		raise ValueError(f"Unsupported file format: {suffix}")
+		paths = list(file_paths)
 
-	return loader.load()
+	all_documents = []
+
+	for raw_path in paths:
+		path = Path(raw_path)
+		suffix = path.suffix.lower()
+
+		if suffix == ".pdf":
+			documents = PDFPlumberLoader(str(path)).load()
+		elif suffix == ".docx":
+			documents = _load_docx(path)
+		else:
+			raise ValueError(f"Unsupported file format: {suffix}")
+
+		date_uploaded = datetime.now().isoformat()
+		for document in documents:
+			metadata = dict(document.metadata or {})
+			metadata.update(
+				{
+					"source": path.name,
+					"file_type": suffix,
+					"date_uploaded": date_uploaded,
+				}
+			)
+			document.metadata = metadata
+			all_documents.append(document)
+
+	return all_documents
 
 
 def split_text(documents, chunk_size=1000, chunk_overlap=100):
-	"""Split documents into smaller chunks using RecursiveCharacterTextSplitter."""
+	"""Split documents while preserving source metadata in every chunk."""
 	text_splitter = RecursiveCharacterTextSplitter(
 		chunk_size=chunk_size,
 		chunk_overlap=chunk_overlap,
 	)
-	return text_splitter.split_documents(documents)
+
+	chunks = []
+	for document in documents:
+		base_metadata = dict(document.metadata or {})
+		for chunk_text in text_splitter.split_text(document.page_content):
+			chunks.append(Document(page_content=chunk_text, metadata=dict(base_metadata)))
+
+	return chunks
 
 
 def get_embedding_model():
@@ -40,6 +100,12 @@ def get_embedding_model():
 	)
 
 
+def process_multiple_documents(file_paths, chunk_size=1000, chunk_overlap=100):
+	"""Process multiple files and return final chunks ready for vector database ingestion."""
+	documents = load_document(file_paths)
+	return split_text(documents, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+
+
 def process_pipeline(file_path, chunk_size=1000, chunk_overlap=100):
 	"""Run the full processing pipeline and return chunks with embedding model."""
 	docs = load_document(file_path)
@@ -49,28 +115,77 @@ def process_pipeline(file_path, chunk_size=1000, chunk_overlap=100):
 		"embedding_model": get_embedding_model(),
 	}
 
-
+#Hàm để test file docx và pdf, nếu không có file nào được cung cấp thì sẽ tạo 2 file docx mẫu để test
+#chỉ để test, không phải là phần chính của module, nên sẽ xóa sau khi test xong
 if __name__ == "__main__":
-	test_file = Path(__file__).with_name("test.txt")
-	sample_text = (
-		"LangChain pipeline test content. " * 80
-		+ "This block is intentionally long so text splitting can produce multiple chunks. " * 20
+	parser = argparse.ArgumentParser(description="Test document processing pipeline")
+	parser.add_argument(
+		"files",
+		nargs="*",
+		help="Paths to input files (.pdf/.docx). If omitted, creates sample DOCX files.",
 	)
-	test_file.write_text(sample_text, encoding="utf-8")
+	parser.add_argument("--chunk-size", type=int, default=500)
+	parser.add_argument("--chunk-overlap", type=int, default=50)
+	args = parser.parse_args()
+
+	created_test_files = []
+	input_files = []
+
+	if args.files:
+		input_files = [Path(p) for p in args.files]
+	else:
+		# Create 2 sample DOCX files for multi-file testing.
+		try:
+			import docx  # python-docx
+		except ImportError as exc:
+			raise ImportError(
+				"To run the built-in DOCX test, install: pip install python-docx"
+			) from exc
+
+		base_dir = Path(__file__).parent
+		for idx in range(1, 3):
+			p = base_dir / f"test_{idx}.docx"
+			d = docx.Document()
+			d.add_paragraph(f"Tai lieu DOCX test so {idx}. " * 120)
+			d.save(str(p))
+			created_test_files.append(p)
+			input_files.append(p)
+
 	success = False
-
 	try:
-		result = process_pipeline(str(test_file), chunk_size=500, chunk_overlap=50)
-		chunk_list = result["chunks"]
-
-		print(f"Tong so chunks duoc tao: {len(chunk_list)}")
-		if chunk_list:
-			print("Noi dung chunk dau tien:")
-			print(chunk_list[0])
-		else:
+		chunks = process_multiple_documents(
+			[str(p) for p in input_files],
+			chunk_size=args.chunk_size,
+			chunk_overlap=args.chunk_overlap,
+		)
+		print(f"Tong so chunks duoc tao: {len(chunks)}")
+		if not chunks:
 			print("Khong co chunk nao duoc tao.")
+		else:
+			counts_by_source = defaultdict(int)
+			first_chunk_by_source = {}
+			for chunk in chunks:
+				source = (chunk.metadata or {}).get("source", "<unknown>")
+				counts_by_source[source] += 1
+				if source not in first_chunk_by_source:
+					first_chunk_by_source[source] = chunk
+
+			print("So chunks theo tung file:")
+			for source in sorted(counts_by_source.keys()):
+				print(f"- {source}: {counts_by_source[source]}")
+
+			print("\nChunk dau tien cua moi file:")
+			for source in sorted(first_chunk_by_source.keys()):
+				chunk = first_chunk_by_source[source]
+				print(f"\n=== {source} ({chunk.metadata.get('file_type')}) ===")
+				print("Metadata:")
+				print(chunk.metadata)
+				print("Noi dung (doan dau):")
+				print(chunk.page_content)
 		success = True
 	finally:
-		if success and test_file.exists():
-			test_file.unlink()
-			print("Da xoa file test.txt sau khi test thanh cong.")
+		if success:
+			for p in created_test_files:
+				if p.exists():
+					p.unlink()
+					print(f"Da xoa file test: {p.name}")
