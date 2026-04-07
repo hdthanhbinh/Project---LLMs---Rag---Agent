@@ -1,0 +1,54 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+5 0 obj
+<< /Length 917 >>
+stream
+BT
+/F1 12 Tf
+50 780 Td
+16 TL
+(Sample Report 2: Education Platform Usage Analysis) Tj
+T* (Organization: BlueRiver Learning Center) Tj
+T* (Period: Semester 1, 2026) Tj
+T* () Tj
+T* (Executive Summary) Tj
+T* (The platform supported 1250 active students across 14 courses.) Tj
+T* (Average weekly study time was 6.2 hours per learner.) Tj
+T* (Vietnamese language support increased completion rates in beginner classes.) Tj
+T* () Tj
+T* (Key Findings) Tj
+T* (1. Search queries about deadlines were the most common help requests.) Tj
+T* (2. Students preferred concise answers with step by step examples.) Tj
+T* (3. PDF course handouts were accessed more often than slide decks.) Tj
+T* () Tj
+T* (Recommendations) Tj
+T* (Add hybrid search for document retrieval and FAQ matching.) Tj
+T* (Store chat history to help learners review previous answers.) Tj
+T* (Improve multilingual support for Vietnamese and English content.) Tj
+ET
+endstream
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000000311 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+1279
+%%EOF
