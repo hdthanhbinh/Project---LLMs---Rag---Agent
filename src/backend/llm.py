@@ -1,6 +1,6 @@
 from langchain_ollama import ChatOllama
 
-LLM_MODEL_NAME = "qwen2.5:3b"
+LLM_MODEL_NAME = "qwen2.5:1.5b"
 
 def get_llm() -> ChatOllama:
     return ChatOllama(

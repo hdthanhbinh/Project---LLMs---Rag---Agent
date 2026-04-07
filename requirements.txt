@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 streamlit==1.56.0
 ollama
 langchain
@@ -9,3 +10,16 @@ faiss-cpu
 pypdf
 python-docx
 torch
+=======
+streamlit
+pdfplumber
+python-docx
+langchain
+langchain-community
+langchain-huggingface
+langchain-ollama
+faiss-cpu
+sentence-transformers
+ollama
+torch --index-url https://download.pytorch.org/whl/cpu
+>>>>>>> origin/main

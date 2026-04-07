@@ -9,3 +9,5 @@ faiss-cpu
 pypdf
 python-docx
 torch
+python-multipart
+pdfplumber

@@ -8,16 +8,17 @@ from langchain_core.documents import Document
 from pathlib import Path
 from pprint import pprint
 
-from backend.llm import get_llm
+from src.backend.llm import get_llm
 
-from backend.embeddings import get_embeddings
+from src.processor import get_embedding_model
 
-INDEX_DIR = Path("faiss_index")
+INDEX_DIR = Path("src/faiss_index")
 
 
 def build_vector_store(documents: Iterable[Document]) -> FAISS:
     """Create a FAISS index from LangChain documents."""
-    embeddings = get_embeddings()
+    embeddings = get_embedding_model()
+
     return FAISS.from_documents(list(documents), embeddings)
 
 
@@ -31,7 +32,7 @@ def save_vector_store(vector_store: FAISS, index_dir: Path | str = INDEX_DIR) ->
 def load_vector_store(index_dir: Path | str = INDEX_DIR) -> FAISS:
     """Load a previously saved FAISS index from disk."""
     index_path = Path(index_dir)
-    embeddings = get_embeddings()
+    embeddings = get_embedding_model()
     return FAISS.load_local(
         str(index_path),
         embeddings,
