@@ -1,139 +1,126 @@
 # app.py
 # Người 1 – AI Engineer: RAG Chain core
+# Tích hợp với backend của Người 2 (src/backend/)
 
 import sys
 import os
 
-from langchain_community.vectorstores import FAISS
-from langchain_ollama import OllamaLLM
-from langchain_classic.chains.retrieval_qa.base import RetrievalQA
-from langchain_core.prompts import PromptTemplate
 sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
-# Dùng 3 hàm riêng lẻ từ processor.py của Người 4
-# (thay vì process_pipeline() để lấy được Document objects có metadata)
-from processor import load_document, split_text, get_embedding_model
+
+from pathlib import Path
+
+from src.backend.llm import get_llm
+from src.backend.prompt_builder import PromptBuilder
+from src.backend.rag_service import RagService
+from src.backend.retriever import HybridRetriever, KeywordRetriever, SemanticRetriever
+from src.backend.vector_store import (
+    build_vector_store,
+    save_vector_store,
+    load_vector_store,
+    INDEX_DIR,
+)
+from src.processor import load_document, split_text, get_embedding_model
 
 
 class RAGChain:
     """
     Lớp trung tâm điều phối toàn bộ pipeline RAG.
-    Gồm 3 bước chính: build_vectorstore → build_chain → ask
+    Tích hợp với backend của Người 2:
+      - HybridRetriever (FAISS semantic + BM25 keyword)
+      - RagService (xử lý câu hỏi, trả về answer + sources + latency)
+      - FAISS lưu xuống disk (src/faiss_index/) để tái sử dụng
 
     Sơ đồ luồng dữ liệu:
       file_path
-        → load_document()       # Người 4: đọc PDF/DOCX thành Document objects
-        → split_text()          # Người 4: chia nhỏ thành chunks có metadata
-        → FAISS.from_documents()# Bước này: embed + lưu vào vector index
-        → RetrievalQA chain     # Bước này: kết nối retriever + LLM + prompt
-        → ask(question)         # Bước này: trả về câu trả lời string
+        → load_document()           # Người 4: đọc PDF/DOCX
+        → split_text()              # Người 4: chia chunks có metadata
+        → build_vector_store()      # Người 2: tạo FAISS index
+        → save_vector_store()       # Người 2: lưu xuống disk
+        → HybridRetriever           # Người 2: kết hợp semantic + keyword
+        → RagService.answer()       # Người 2: sinh câu trả lời
     """
 
     def __init__(self):
-        self.vectorstore = None   # FAISS index (được tạo sau khi upload file)
-        self.chain = None         # RetrievalQA chain (được tạo sau khi có vectorstore)
+        self.vectorstore = None     # FAISS index
+        self.rag_service = None     # RagService của Người 2
+        self.chunks = []            # giữ lại chunks để khởi tạo KeywordRetriever
+
+        # Khởi tạo LLM và PromptBuilder từ backend Người 2
+        self.llm = get_llm()                    # ChatOllama(qwen2.5:1.5b)
+        self.prompt_builder = PromptBuilder()   # prompt tự động detect ngôn ngữ
 
     # ------------------------------------------------------------------ #
     #  BƯỚC 1: Nhận file path → tạo FAISS vectorstore                     #
     # ------------------------------------------------------------------ #
     def build_vectorstore(self, file_path: str) -> int:
         """
-        Gọi load_document() và split_text() từ processor.py của Người 4,
-        sau đó đưa vào FAISS để tạo vector index.
+        Load document → split chunks → tạo FAISS index → lưu xuống disk.
 
-        Dùng from_documents() thay vì from_texts() để giữ nguyên metadata
-        của từng chunk (source, file_type, date_uploaded) — cần thiết cho
-        citation tracking ở tuần 3.
+        Khác với version cũ (in-memory), giờ FAISS được lưu vào
+        src/faiss_index/ để có thể tải lại mà không cần xử lý lại file.
 
         Trả về số lượng chunks đã được index.
         """
-        # Bước 1a: Load file → list[Document]
-        # Mỗi Document có page_content (nội dung) và metadata (nguồn gốc)
+        # Bước 1a: Load file → list[Document] có metadata đầy đủ
         docs = load_document(file_path)
 
         # Bước 1b: Chia nhỏ thành chunks → list[Document]
-        # Mỗi chunk kế thừa metadata từ Document gốc:
-        #   {
-        #     "source": "gutenberg.pdf",
-        #     "file_type": ".pdf",
-        #     "date_uploaded": "2026-04-06T..."
-        #   }
-        chunks = split_text(docs)
+        # Metadata mỗi chunk: { source, file_type, date_uploaded }
+        self.chunks = split_text(docs)
 
-        # Bước 1c: Lấy embedding model (MPNet 768-dim multilingual)
-        embedding_model = get_embedding_model()
+        # Bước 1c: Tạo FAISS index (dùng hàm của Người 2)
+        # build_vector_store() tự gọi get_embedding_model() bên trong
+        self.vectorstore = build_vector_store(self.chunks)
 
-        # Bước 1d: Tạo FAISS index từ chunks + embedding model
-        # from_documents() tự động:
-        #   1. Embed từng chunk.page_content thành vector 768 chiều
-        #   2. Lưu vector + metadata vào in-memory FAISS index
-        self.vectorstore = FAISS.from_documents(
-            documents=chunks,
-            embedding=embedding_model,
-        )
+        # Bước 1d: Lưu xuống disk → src/faiss_index/
+        # Lần sau load lại không cần xử lý file nữa
+        save_vector_store(self.vectorstore)
 
-        return len(chunks)  # trả về để Streamlit (Người 3) hiển thị thông báo
+        return len(self.chunks)
 
     # ------------------------------------------------------------------ #
-    #  BƯỚC 2: Tạo RetrievalQA chain từ vectorstore + Ollama              #
+    #  BƯỚC 2: Tạo RagService từ vectorstore + Ollama                     #
     # ------------------------------------------------------------------ #
     def build_chain(self):
         """
-        Kết nối 3 thành phần thành 1 chain hoàn chỉnh:
-          FAISS retriever  → tìm top-3 chunks liên quan với câu hỏi
-          PromptTemplate   → đóng gói context + câu hỏi thành prompt
-          OllamaLLM        → sinh câu trả lời từ prompt
+        Khởi tạo HybridRetriever và RagService từ backend của Người 2.
+
+        HybridRetriever kết hợp:
+          - SemanticRetriever: FAISS cosine similarity (tìm theo nghĩa)
+          - KeywordRetriever:  BM25 (tìm theo từ khóa chính xác)
+          → Kết quả tốt hơn dùng 1 retriever đơn lẻ
         """
         if self.vectorstore is None:
             raise ValueError("Gọi build_vectorstore() trước!")
 
-        # --- Retriever: tìm top-3 chunks gần nhất với câu hỏi ---
-        # search_type="similarity": dùng cosine similarity
-        # k=3: lấy 3 chunks liên quan nhất → đủ context, không quá dài
-        retriever = self.vectorstore.as_retriever(
-            search_type="similarity",
-            search_kwargs={"k": 3},
+        # --- Semantic retriever: dùng FAISS ---
+        semantic_retriever = SemanticRetriever(
+            vector_store=self.vectorstore,
+            k=3,
         )
 
-        # --- Prompt template ---
-        # {context}: 3 chunks tìm được (LangChain tự điền)
-        # {question}: câu hỏi người dùng (LangChain tự điền)
-        # Hướng dẫn model trả lời ngắn gọn và bám sát tài liệu
-        prompt_template = """Bạn là trợ lý thông minh. Hãy dùng ngữ cảnh dưới đây \
-để trả lời câu hỏi một cách ngắn gọn (3-4 câu).
-Nếu thông tin không có trong ngữ cảnh, hãy nói "Tôi không tìm thấy thông tin này trong tài liệu."
-
-Ngữ cảnh:
-{context}
-
-Câu hỏi: {question}
-
-Trả lời:"""
-
-        prompt = PromptTemplate(
-            input_variables=["context", "question"],
-            template=prompt_template,
+        # --- Keyword retriever: dùng BM25 ---
+        # Cần truyền vào list[Document] (chunks) để BM25 index
+        keyword_retriever = KeywordRetriever(
+            documents=self.chunks,
+            k=3,
         )
 
-        # --- OllamaLLM: chạy local, không cần internet ---
-        # temperature=0.3: thấp → câu trả lời ổn định, bám sát tài liệu
-        # (tài liệu gốc dùng 0.7 nhưng với RAG nên dùng thấp hơn
-        #  để tránh model "sáng tạo" ngoài ngữ cảnh)
-        llm = OllamaLLM(
-            model="qwen2.5:7b",
-            temperature=0.3,
+        # --- Hybrid retriever: kết hợp cả 2 ---
+        # alpha=0.5: cân bằng 50% semantic + 50% keyword
+        hybrid_retriever = HybridRetriever(
+            semantic_retriever=semantic_retriever,
+            keyword_retriever=keyword_retriever,
+            alpha=0.5,
         )
 
-        # --- RetrievalQA: chain tích hợp retriever + llm + prompt ---
-        # chain_type="stuff": nhét thẳng 3 chunks vào 1 prompt rồi gửi 1 lần
-        #   → đơn giản nhất, phù hợp cho tuần 1
-        #   → Qwen2.5:7b có context 128K tokens, đủ chứa 3 chunks
-        # return_source_documents=False: tuần 3 đổi thành True để làm citation
-        self.chain = RetrievalQA.from_chain_type(
-            llm=llm,
-            chain_type="stuff",
-            retriever=retriever,
-            return_source_documents=False,
-            chain_type_kwargs={"prompt": prompt},
+        # --- RagService: xử lý toàn bộ pipeline hỏi-đáp ---
+        # Trả về dict gồm: answer, sources (citation), meta (latency, model)
+        self.rag_service = RagService(
+            llm=self.llm,
+            prompt_builder=self.prompt_builder,
+            retrieve=hybrid_retriever,
+            k=3,
         )
 
     # ------------------------------------------------------------------ #
@@ -141,20 +128,31 @@ Trả lời:"""
     # ------------------------------------------------------------------ #
     def ask(self, question: str) -> str:
         """
-        Gửi câu hỏi vào chain, nhận câu trả lời dạng string.
-        Chain tự động thực hiện:
-          1. Embed câu hỏi thành vector
-          2. Tìm top-3 chunks gần nhất trong FAISS
-          3. Ghép chunks vào prompt template
-          4. Gửi prompt lên Ollama (Qwen2.5:7b)
-          5. Trả về câu trả lời
+        Gửi câu hỏi vào RagService, nhận câu trả lời dạng string.
+
+        RagService.answer() trả về dict:
+          {
+            "question": "...",
+            "answer":   "...",       ← đây là phần ta cần
+            "sources":  [...],       ← citation (tuần 3 Người 3 sẽ hiển thị)
+            "meta":     { latency, model, k }
+          }
         """
-        if self.chain is None:
+        if self.rag_service is None:
             return "Chưa nạp tài liệu. Hãy upload file trước."
 
-        # invoke() trả về dict với key "result" chứa câu trả lời string
-        response = self.chain.invoke({"query": question})
-        return response["result"]
+        result = self.rag_service.answer(question)
+        return result["answer"]
+
+    def ask_with_sources(self, question: str) -> dict:
+        """
+        Giống ask() nhưng trả về toàn bộ dict (answer + sources + meta).
+        Người 3 (Streamlit) dùng hàm này để hiển thị citation.
+        """
+        if self.rag_service is None:
+            return {"answer": "Chưa nạp tài liệu.", "sources": [], "meta": {}}
+
+        return self.rag_service.answer(question)
 
     # ------------------------------------------------------------------ #
     #  Hàm tiện ích: chạy cả pipeline trong 1 lệnh                        #
@@ -162,13 +160,30 @@ Trả lời:"""
     def load_and_build(self, file_path: str) -> int:
         """
         Gộp bước 1 + 2 lại để Người 3 (Streamlit) tiện gọi.
-        Người 3 chỉ cần gọi hàm này sau khi user upload file,
-        sau đó gọi ask() để hỏi đáp.
         Trả về số chunks để hiển thị thông báo trên giao diện.
         """
         num_chunks = self.build_vectorstore(file_path)
         self.build_chain()
         return num_chunks
+
+    def load_from_disk_and_build(self) -> bool:
+        """
+        Tải FAISS index đã lưu từ disk (không cần upload lại file).
+        Dùng khi khởi động lại app mà index vẫn còn.
+        Trả về True nếu load thành công, False nếu chưa có index.
+        """
+        if not INDEX_DIR.exists():
+            return False
+
+        try:
+            self.vectorstore = load_vector_store()
+            # Lấy documents từ docstore để khởi tạo KeywordRetriever
+            self.chunks = list(self.vectorstore.docstore._dict.values())
+            self.build_chain()
+            return True
+        except Exception as e:
+            print(f"Không thể load index từ disk: {e}")
+            return False
 
 
 # ------------------------------------------------------------------ #
@@ -177,7 +192,7 @@ Trả lời:"""
 if __name__ == "__main__":
     if len(sys.argv) < 3:
         print("Cách dùng: python app.py <đường_dẫn_file> <câu_hỏi>")
-        print('Ví dụ:     python app.py data/gutenberg.pdf "Tài liệu này nói về gì?"')
+        print('Ví dụ:     python app.py data/report/gutenberg.pdf "Tài liệu này nói về gì?"')
         sys.exit(1)
 
     file_path = sys.argv[1]
@@ -188,5 +203,9 @@ if __name__ == "__main__":
     num = rag.load_and_build(file_path)
     print(f"Đã index {num} chunks. Đang hỏi...")
 
-    answer = rag.ask(question)
-    print(f"\nCâu trả lời:\n{answer}")
+    result = rag.ask_with_sources(question)
+    print(f"\nCâu trả lời:\n{result['answer']}")
+    print(f"\nNguồn trích dẫn:")
+    for src in result["sources"]:
+        print(f"  [{src['index']}] {src['source']} - trang {src['page']}")
+    print(f"\nLatency: {result['meta'].get('latency')}s | Model: {result['meta'].get('model')}")
