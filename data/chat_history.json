@@ -1,0 +1,52 @@
+[
+  {
+    "id": 1,
+    "question": "Hydrid",
+    "answer": "Hybrid retrieval currently uses a source-plus-page key, which can collapse different chunks into one result when multiple chunks come from the same page. This should be standardized to avoid runtime confusion.",
+    "sources": [
+      {
+        "index": 1,
+        "source": "RAG_Project_Status_Report_20260411_085719_84da409f.pdf",
+        "page": 0,
+        "content": "clear message asking for document upload first.\n(cid:127) The upload schema was patched so Swagger renders the files field as binary file input\ninstead of plain string input.\n3. Open Issues and Risks\n(cid:127) Import paths are still mixed in some places between backend.* and src.backend.*. This\nshould be standardized to avoid runtime confusion.\n(cid:127) Hybrid retrieval currently uses a source-plus-page key, which can collapse different\nchunks into one result when multiple chunks come from the same page.\n(cid:127) The hybrid score combination should be reviewed because FAISS scores may represent\ndistance, not direct similarity.\n(cid:127) POST /ask can feel slow because each request runs retrieval and then a local Ollama\nmodel inference step.\n(cid:127) requirements.txt still appears to contain unresolved merge markers and should be\ncleaned before broader environment setup.\n4. Recommended Next Steps\n(cid:127) Keep processor.py as the only ingest and splitting layer."
+      },
+      {
+        "index": 2,
+        "source": "RAG_Project_Status_Report_20260411_085719_84da409f.pdf",
+        "page": 1,
+        "content": "performance tuning."
+      }
+    ],
+    "meta": {
+      "k": 2,
+      "latency": 15.67,
+      "model": "qwen2.5:1.5b"
+    },
+    "timestamp": "2026-04-11T14:22:30.588910"
+  },
+  {
+    "id": 2,
+    "question": "Hydrid",
+    "answer": "Hybrid retrieval currently uses a source-plus-page key, which can collapse different chunks into one result when multiple chunks come from the same page.",
+    "sources": [
+      {
+        "index": 1,
+        "source": "RAG_Project_Status_Report_20260411_085719_84da409f.pdf",
+        "page": 0,
+        "content": "clear message asking for document upload first.\n(cid:127) The upload schema was patched so Swagger renders the files field as binary file input\ninstead of plain string input.\n3. Open Issues and Risks\n(cid:127) Import paths are still mixed in some places between backend.* and src.backend.*. This\nshould be standardized to avoid runtime confusion.\n(cid:127) Hybrid retrieval currently uses a source-plus-page key, which can collapse different\nchunks into one result when multiple chunks come from the same page.\n(cid:127) The hybrid score combination should be reviewed because FAISS scores may represent\ndistance, not direct similarity.\n(cid:127) POST /ask can feel slow because each request runs retrieval and then a local Ollama\nmodel inference step.\n(cid:127) requirements.txt still appears to contain unresolved merge markers and should be\ncleaned before broader environment setup.\n4. Recommended Next Steps\n(cid:127) Keep processor.py as the only ingest and splitting layer."
+      },
+      {
+        "index": 2,
+        "source": "RAG_Project_Status_Report_20260411_085719_84da409f.pdf",
+        "page": 1,
+        "content": "performance tuning."
+      }
+    ],
+    "meta": {
+      "k": 2,
+      "latency": 31.19,
+      "model": "qwen2.5:1.5b"
+    },
+    "timestamp": "2026-04-11T14:32:56.911600"
+  }
+]

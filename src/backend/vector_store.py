@@ -45,4 +45,21 @@ def similarity_search(query: str, k: int = 4, index_dir: Path | str = INDEX_DIR)
     vector_store = load_vector_store(index_dir)
     return vector_store.similarity_search(query, k=k)
 
+# vector existing ?
 
+# def index_exists(index_dir: Path | str = INDEX_DIR) -> bool:
+#     index_path = Path(index_dir)
+#     return index_path.exists() and any(index_path.iterdir())
+
+# def load_vector_store(index_dir: Path | str = INDEX_DIR) -> FAISS:
+#     index_path = Path(index_dir)
+
+#     if not index_exists(index_path):
+#         raise FileNotFoundError(f"FAISS index not found in: {index_path}")
+
+#     embeddings = get_embedding_model()
+#     return FAISS.load_local(
+#         str(index_path),
+#         embeddings,
+#         allow_dangerous_deserialization=True,
+#     )

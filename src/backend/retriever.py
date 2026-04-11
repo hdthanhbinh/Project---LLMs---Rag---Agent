@@ -1,5 +1,33 @@
 # backend/retriever.py
 from langchain_community.retrievers import BM25Retriever
+
+def match_filter(doc, filter) -> bool:
+    """Kiểm tra doc có thỏa metadata filter không."""
+    if filter is None:
+        return True
+
+    meta = doc.metadata or {}
+    print(f"DEBUG match_filter | source='{meta.get('source')}' | file_type='{meta.get('file_type')}' | filter.sources={filter.sources}")
+
+    if filter.sources:
+        if meta.get("source") not in filter.sources:
+            return False
+
+    if filter.file_type:
+        stored = meta.get("file_type", "").lstrip(".")
+        wanted = filter.file_type.lstrip(".")
+        if stored != wanted:
+            return False
+
+    if filter.date_from:
+        if meta.get("date_uploaded", "") < filter.date_from:
+            return False
+
+    if filter.date_to:
+        if meta.get("date_uploaded", "") > filter.date_to:
+            return False
+
+    return True
 class SemanticRetriever:
     def __init__(self,vector_store,  k: int = 4):
         self.k = k
@@ -24,35 +52,47 @@ class KeywordRetriever:
         return self.retriever.invoke(query)
 
 class HybridRetriever:
-    def __init__(self, semantic_retriever: SemanticRetriever, keyword_retriever: KeywordRetriever, alpha: float = 0.5):
+    RRF_K = 60  # hằng số chuẩn của RRF
+
+    def __init__(
+        self,
+        semantic_retriever: SemanticRetriever,
+        keyword_retriever: KeywordRetriever,
+        alpha: float = 0.5,
+        top_k: int = 4,
+    ):
         self.semantic_retriever = semantic_retriever
         self.keyword_retriever = keyword_retriever
         self.alpha = alpha
-    def retrieve(self, query: str):
-        semantic_docs = self.semantic_retriever.vector_store.similarity_search_with_score(query, k=10)
+        self.top_k = top_k
+
+    def _make_key(self, doc) -> str:
+        source = doc.metadata.get("source", "")
+        page = str(doc.metadata.get("page", ""))
+        key = source + page
+        return key if key.strip() else doc.page_content[:100]
+
+    def retrieve(self, query: str, filter=None) -> list:
+        semantic_docs = self.semantic_retriever.vector_store\
+            .similarity_search_with_score(query, k=30)
         keyword_docs = self.keyword_retriever.retriever.invoke(query)
 
-        scores = {}   # key: str identifier
-        doc_map = {}  # key: str identifier → Document object
+        scores: dict[str, float] = {}
+        doc_map: dict[str, object] = {}
 
-        # Semantic score
-        for doc, score in semantic_docs:
-            # Dùng source + page nếu có, fallback về page_content
-            key = doc.metadata.get("source", "") + str(doc.metadata.get("page", "")) \
-                or doc.page_content[:100]
-            
-            scores[key] = scores.get(key, 0) + self.alpha * (1 - score)
-            doc_map[key] = doc  # lưu lại object gốc
-
-        # Keyword score
-        for rank, doc in enumerate(keyword_docs):
-            key = doc.metadata.get("source", "") + str(doc.metadata.get("page", "")) \
-                or doc.page_content[:100]
-            
-            scores[key] = scores.get(key, 0) + (1 - self.alpha) * (1 / (rank + 1))
+        for rank, (doc, _) in enumerate(semantic_docs):
+            if not match_filter(doc, filter):   # ✅ filter ở đây
+                continue
+            key = self._make_key(doc)
+            scores[key] = scores.get(key, 0.0) + self.alpha * (1 / (rank + self.RRF_K))
             doc_map[key] = doc
 
-        # Sort và trả về Document objects
-        sorted_keys = sorted(scores, key=lambda k: scores[k], reverse=True)
+        for rank, doc in enumerate(keyword_docs):
+            if not match_filter(doc, filter):   # ✅ filter ở đây
+                continue
+            key = self._make_key(doc)
+            scores[key] = scores.get(key, 0.0) + (1 - self.alpha) * (1 / (rank + self.RRF_K))
+            doc_map[key] = doc
 
-        return [doc_map[k] for k in sorted_keys[:self.semantic_retriever.k]]
+        sorted_keys = sorted(scores, key=lambda k: scores[k], reverse=True)
+        return [doc_map[k] for k in sorted_keys[:self.top_k]]

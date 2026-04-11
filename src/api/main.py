@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 import asyncio
 from pathlib import Path
-
+import uuid
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel, Field
@@ -10,17 +10,26 @@ from src.backend.llm import get_llm
 from src.backend.prompt_builder import PromptBuilder
 from src.backend.rag_service import RagService
 from src.backend.retriever import HybridRetriever, KeywordRetriever, SemanticRetriever
-from src.backend.vector_store import INDEX_DIR, build_vector_store, load_vector_store, save_vector_store
+from src.backend.vector_store import INDEX_DIR, build_vector_store, load_vector_store, save_vector_store 
 from src.processor import process_multiple_documents
 from datetime import datetime
+from src.backend.history_store import add_entry, get_all_history, get_by_id, clear
+
 import traceback
 
 DATA_DIR = Path("data/uploads")
 SUPPORTED_EXTENSIONS = {".pdf", ".docx"}
+MAX_FILE_SIZE = 50 * 1024 * 1024  
 
+class DocumentFilter(BaseModel):
+    sources: list[str] | None = None        
+    file_type: str | None = None           
+    date_from: str | None = None            
+    date_to: str | None = None 
 
 class Question(BaseModel):
     question: str
+    filter: DocumentFilter | None = None
 
 
 class SourceItem(BaseModel):
@@ -41,8 +50,18 @@ class UploadResponse(BaseModel):
     message: str
     files: list[str] = Field(default_factory=list)
     chunk_count: int = 0
+    total_indexed: int = 0 # tong so file da duoc index
 
+class HistoryEntry(BaseModel):
+    question: str
+    answer: str
+    timestamp: str
+    sources: list[SourceItem] = Field(default_factory=list)  # as default =[list]
+    meta: dict = Field(default_factory=dict)
 
+class HistoryResponse(BaseModel):
+    total: int
+    entries: list[HistoryEntry] = Field(default_factory=list)
 
 def build_rag_service(vector_store, llm, prompt_builder) -> RagService:
     documents = list(vector_store.docstore._dict.values())
@@ -51,6 +70,17 @@ def build_rag_service(vector_store, llm, prompt_builder) -> RagService:
     retriever = HybridRetriever(semantic_retriever, keyword_retriever)
     return RagService(llm, prompt_builder, retriever)
 
+class DocumentInfo(BaseModel):
+    name: str
+    original_name: str
+    file_type: str
+    size_kb: float
+    date_uploaded: str
+
+
+class DocumentListResponse(BaseModel):
+    total: int
+    documents: list[DocumentInfo]
 
 
 def collect_uploaded_files() -> list[Path]:
@@ -67,8 +97,9 @@ def resolve_upload_path(filename: str) -> Path:
     safe_name = Path(filename or "uploaded_file").name
     stem = Path(safe_name).stem
     suffix = Path(safe_name).suffix
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    return DATA_DIR / f"{stem}_{timestamp}{suffix}"
+    unique_id = uuid.uuid4().hex[:8]
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return DATA_DIR / f"{stem}_{timestamp}_{unique_id}{suffix}"
 
 
 
@@ -95,6 +126,7 @@ async def lifespan(app: FastAPI):
                 app.state.llm,
                 app.state.prompt_builder,
             )
+        print(f"Startup: loaded index OK")
     except Exception as exc:
         print(f"Startup warning: {exc}")
 
@@ -102,8 +134,11 @@ async def lifespan(app: FastAPI):
     print("Shutting down...")
 
 
-app = FastAPI(lifespan=lifespan)
-
+app = FastAPI(
+    title="Multi-Document RAG API",
+    version="1.0.0",
+    lifespan=lifespan,
+)
 
 
 def custom_openapi():
@@ -117,7 +152,11 @@ def custom_openapi():
         routes=app.routes,
     )
 
-    upload_schema = openapi_schema.get("components", {}).get("schemas", {}).get("Body_upload_upload_post")
+    upload_schema = (
+        openapi_schema.get("components", {})
+        .get("schemas", {})
+        .get("Body_upload_upload_post")
+    )
     if upload_schema:
         files_schema = upload_schema.get("properties", {}).get("files")
         if files_schema and files_schema.get("type") == "array":
@@ -139,12 +178,41 @@ async def ask(q: Question):
 
     try:
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, app.state.rag_service.answer, q.question)
+        result = await loop.run_in_executor(
+            None,
+            app.state.rag_service.answer,
+            q.question,
+            q.filter)
+        add_entry (
+            question = result["question"],
+            ans = result["answer"],
+            sources = result["sources"],
+            meta = result["meta"]
+        
+        )
+        
+        
         return result
     except Exception as exc:
         traceback.print_exc()  
         raise HTTPException(status_code=500, detail=str(exc)) 
 
+@app.get("/history", response_model=HistoryResponse)
+def get_history():
+    # get toan bo lich su
+    entries = get_all_history()
+    return HistoryResponse(total=len(entries), entries=entries)
+
+@app.get("/history/{entry_id}", response_model=HistoryEntry)
+def get_history_entry(entry_id: int):
+    entry = get_by_id(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail=f"No history entry with id {entry_id}")
+    return entry
+@app.delete("/history")
+def clear_history():
+    clear()
+    return {"message": "Chat history cleared."}
 
 @app.get("/health")
 def health():
@@ -155,48 +223,124 @@ def health():
         "uploaded_files": len(collect_uploaded_files()),
     }
 
-
 @app.post("/upload", response_model=UploadResponse)
 async def upload(files: list[UploadFile] = File(...)):
-    if not files:
-        raise HTTPException(status_code=400, detail="No files uploaded.")
 
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    saved_files: list[str] = []
-    MAX_FILE_SIZE = 10 * 1024 * 1024
+    if not files:
+        raise HTTPException(400, "Không có file nào được gửi lên.")
+
+    saved: list[str] = []
+    skipped: list[str] = []
 
     for file in files:
         suffix = Path(file.filename or "").suffix.lower()
-        if suffix not in SUPPORTED_EXTENSIONS:
-            raise HTTPException(status_code=400, detail=f"Unsupported: {file.filename}")
 
+        # Validate extension
+        if suffix not in SUPPORTED_EXTENSIONS:
+            skipped.append(f"{file.filename} (định dạng không hỗ trợ)")
+            continue
+
+        # Validate size
         content = await file.read()
         if len(content) > MAX_FILE_SIZE:
-            raise HTTPException(status_code=413, detail=f"{file.filename} vượt quá 10MB.")
+            skipped.append(f"{file.filename} (vượt quá 50MB)")
+            continue
 
-        target_path = resolve_upload_path(file.filename or "uploaded_file")
-        target_path.write_bytes(content)
-        saved_files.append(str(target_path))  
+        # Lưu file
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        dest = resolve_upload_path(file.filename)
+        dest.write_bytes(content)
+        saved.append(str(dest))
 
-    all_files = [str(path) for path in collect_uploaded_files()]
-    chunk_count = 0 
+    if not saved:
+        raise HTTPException(
+            400,
+            f"Không có file hợp lệ nào được upload. Bỏ qua: {skipped}",
+        )
 
-    try:
+    # Reindex toàn bộ — file cũ + file mới vừa upload
+    async with app.state.index_lock:
+        all_files = [str(p) for p in collect_uploaded_files()]
         loop = asyncio.get_running_loop()
-        async with app.state.index_lock:
-            _, rag_service, chunk_count = await asyncio.wait_for(
-                loop.run_in_executor(None, rebuild_index, all_files, app.state.llm, app.state.prompt_builder),
-                timeout=120.0
-            )
+        _, rag_service, chunk_count = await loop.run_in_executor(
+            None,
+            rebuild_index,
+            all_files,
+            app.state.llm,
+            app.state.prompt_builder,
+        )
         app.state.rag_service = rag_service
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Index rebuild timed out.")
-    except Exception as exc:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail="Failed to process uploaded files.")
+
+    all_indexed = collect_uploaded_files()
 
     return UploadResponse(
-        message="Files uploaded and indexed successfully.",
-        files=[Path(path).name for path in saved_files],
+        message=f"Upload thành công {len(saved)} file"
+        + (f", bỏ qua {len(skipped)} file" if skipped else ""),
+        files=[Path(p).name for p in saved],
+        skipped=skipped,
         chunk_count=chunk_count,
+        total_indexed=len(all_indexed),
     )
+
+
+@app.get("/documents", response_model=DocumentListResponse)
+def list_documents():
+    """
+    Liệt kê tất cả file đã upload.
+    Dùng field 'name' để truyền vào filter.sources khi /ask.
+    """
+    files = collect_uploaded_files()
+    docs = []
+    for f in files:
+        # Lấy original name: bỏ timestamp và uuid suffix
+        # Tên file: {stem}_{timestamp}_{uuid}{suffix}
+        parts = f.stem.rsplit("_", 2)
+        original_stem = parts[0] if len(parts) == 3 else f.stem
+        docs.append(DocumentInfo(
+            name=f.name,
+            original_name=original_stem + f.suffix,
+            file_type=f.suffix.lstrip("."),
+            size_kb=round(f.stat().st_size / 1024, 1),
+            date_uploaded=datetime.fromtimestamp(
+                f.stat().st_mtime
+            ).isoformat(),
+        ))
+    return DocumentListResponse(total=len(docs), documents=docs)
+
+
+@app.delete("/documents/{filename}")
+async def delete_document(filename: str):
+    """Xóa 1 file theo tên và reindex lại."""
+    target = DATA_DIR / filename
+    if not target.exists():
+        raise HTTPException(404, f"Không tìm thấy file '{filename}'.")
+
+    target.unlink()
+
+    async with app.state.index_lock:
+        remaining = [str(p) for p in collect_uploaded_files()]
+        if remaining:
+            loop = asyncio.get_running_loop()
+            _, rag_service, chunk_count = await loop.run_in_executor(
+                None,
+                rebuild_index,
+                remaining,
+                app.state.llm,
+                app.state.prompt_builder,
+            )
+            app.state.rag_service = rag_service
+        else:
+            # Không còn file nào → xóa index
+            app.state.rag_service = None
+            if INDEX_DIR.exists():
+                import shutil
+                shutil.rmtree(INDEX_DIR)
+            chunk_count = 0
+
+    return {
+        "message": f"Đã xóa '{filename}' và reindex.",
+        "remaining_files": len(collect_uploaded_files()),
+        "chunk_count": chunk_count,
+    }
+
+
