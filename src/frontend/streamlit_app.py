@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
-from app import RAGChain  # Người 1
+from app import RAGChain, DocumentFilter  # Người 1 — DocumentFilter định nghĩa trong app.py
 
 
 # ------------------------------------------------------------------ #
@@ -78,6 +78,17 @@ st.markdown("""
     color: #212529;
 }
 
+/* History entry box */
+.history-box {
+    background: #3A3840;
+    border-left: 3px solid #007BFF;
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 0.82em;
+    margin-bottom: 6px;
+    color: #E0E0E0;
+}
+
 /* Header */
 .main-header {
     color: #007BFF;
@@ -129,6 +140,10 @@ def init_session():
     if "num_chunks" not in st.session_state:
         st.session_state.num_chunks = 0
 
+    # ── MỚI: lưu nguồn file đang được lọc (dùng với DocumentFilter) ──
+    if "filter_source" not in st.session_state:
+        st.session_state.filter_source = None   # None = không lọc (tìm toàn bộ)
+
 
 init_session()
 
@@ -159,32 +174,80 @@ with st.sidebar:
         if st.session_state.uploaded_filename:
             st.markdown(f"📁 `{st.session_state.uploaded_filename}`")
 
+    # ------------------------------------------------------------------ #
+    #  MỚI: DocumentFilter — lọc tìm kiếm theo tên file                   #
+    # ------------------------------------------------------------------ #
+    st.markdown("---")
+    st.markdown("### 🔍 Lọc tài liệu")
+
+    # Chỉ cho phép lọc khi đã có file được index
+    if st.session_state.index_ready and st.session_state.uploaded_filename:
+        use_filter = st.checkbox(
+            "Chỉ tìm trong file hiện tại",
+            value=st.session_state.filter_source is not None,
+            help="Bật để giới hạn tìm kiếm trong file đang được nạp.",
+        )
+        if use_filter:
+            st.session_state.filter_source = st.session_state.uploaded_filename
+            st.caption(f"🎯 Đang lọc: `{st.session_state.filter_source}`")
+        else:
+            st.session_state.filter_source = None
+            st.caption("🌐 Tìm kiếm toàn bộ tài liệu")
+    else:
+        st.caption("_Upload tài liệu để kích hoạt bộ lọc._")
+
     st.markdown("---")
     st.markdown("### 🗑️ Xoá dữ liệu")
 
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Xoá chat", use_container_width=True):
+            # ── MỚI: xoá cả chat_history.json qua clear_history() ──
+            st.session_state.rag.clear_history()
             st.session_state.chat_history = []
             st.rerun()
     with col2:
         if st.button("Reset index", use_container_width=True):
+            # ── MỚI: xoá luôn history khi reset toàn bộ ──
+            st.session_state.rag.clear_history()
             st.session_state.rag = RAGChain()
             st.session_state.index_ready = False
             st.session_state.uploaded_filename = None
             st.session_state.num_chunks = 0
             st.session_state.chat_history = []
+            st.session_state.filter_source = None
             st.rerun()
 
     st.markdown("---")
-    # Lịch sử chat thu gọn
-    if st.session_state.chat_history:
-        st.markdown("### 💬 Lịch sử hội thoại")
-        for i, msg in enumerate(st.session_state.chat_history):
-            if msg["role"] == "user":
-                # Hiện tối đa 50 ký tự
-                preview = msg["content"][:50] + ("..." if len(msg["content"]) > 50 else "")
-                st.markdown(f"_{i//2 + 1}. {preview}_")
+
+    # ------------------------------------------------------------------ #
+    #  MỚI: Lịch sử hội thoại lấy từ get_history() — persistent JSON      #
+    # ------------------------------------------------------------------ #
+    st.markdown("### 💬 Lịch sử hội thoại")
+
+    try:
+        history_entries = st.session_state.rag.get_history()
+    except Exception:
+        history_entries = []
+
+    if history_entries:
+        # Hiển thị 10 câu gần nhất, mới nhất ở trên
+        for entry in reversed(history_entries[-10:]):
+            q_preview = entry.get("question", "")[:60]
+            if len(entry.get("question", "")) > 60:
+                q_preview += "..."
+            ts = entry.get("timestamp", "")[:16].replace("T", " ")  # "2026-04-16 07:23"
+            latency = entry.get("meta", {}).get("latency", "")
+            latency_str = f" · {latency}s" if latency else ""
+            st.markdown(
+                f'<div class="history-box">'
+                f'<b>#{entry.get("id", "?")}</b> {q_preview}<br>'
+                f'<span style="font-size:0.78em;color:#AAA;">{ts}{latency_str}</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+    else:
+        st.caption("_Chưa có lịch sử hội thoại._")
 
 
 # ------------------------------------------------------------------ #
@@ -222,7 +285,8 @@ if uploaded_file is not None:
                 st.session_state.index_ready = True
                 st.session_state.uploaded_filename = uploaded_file.name
                 st.session_state.num_chunks = num_chunks
-                st.session_state.chat_history = []  # reset chat khi đổi file
+                st.session_state.chat_history = []      # reset chat khi đổi file
+                st.session_state.filter_source = None   # reset filter khi đổi file
 
                 # Dọn file tạm
                 os.unlink(tmp_path)
@@ -279,17 +343,25 @@ if question:
     if not st.session_state.index_ready:
         st.warning("⚠️ Hãy upload tài liệu trước khi đặt câu hỏi.")
     else:
-        # Lưu câu hỏi vào history
+        # Lưu câu hỏi vào session state
         st.session_state.chat_history.append({
             "role": "user",
             "content": question,
             "sources": [],
         })
 
-        # Gọi RAGChain
+        # ── MỚI: xây dựng DocumentFilter từ filter_source (nếu có) ──
+        doc_filter = None
+        if st.session_state.filter_source:
+            doc_filter = DocumentFilter(sources=[st.session_state.filter_source])
+
+        # Gọi RAGChain — history được lưu tự động bên trong ask_with_sources()
         with st.spinner("🤔 Đang tìm kiếm và tạo câu trả lời..."):
             try:
-                result = st.session_state.rag.ask_with_sources(question)
+                result = st.session_state.rag.ask_with_sources(
+                    question,
+                    filter=doc_filter,   # ── MỚI: truyền filter vào ──
+                )
                 answer  = result.get("answer", "Không có câu trả lời.")
                 sources = result.get("sources", [])
                 meta    = result.get("meta", {})
@@ -298,7 +370,7 @@ if question:
                 sources = []
                 meta    = {}
 
-        # Lưu câu trả lời vào history
+        # Lưu câu trả lời vào session state để hiển thị trên UI
         st.session_state.chat_history.append({
             "role": "ai",
             "content": answer,
