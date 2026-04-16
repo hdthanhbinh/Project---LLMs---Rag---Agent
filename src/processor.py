@@ -8,7 +8,6 @@ from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-
 def _load_docx(file_path: Path):
 	"""Load a DOCX file into a list of LangChain Document objects."""
 	# DOCX parsing with python-docx.
@@ -65,7 +64,8 @@ def load_document(file_paths):
 			metadata.update(
 				{
 					"source": path.name,
-					"file_type": suffix,
+					# "file_type": suffix, 
+					"file_type": suffix.lstrip("."),   
 					"date_uploaded": date_uploaded,
 				}
 			)

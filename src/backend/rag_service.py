@@ -1,18 +1,63 @@
 from typing import Any
 import time
+import torch
+
+
+# ✅ Optional: log GPU khi load file
+print("CUDA available:", torch.cuda.is_available())
+if torch.cuda.is_available():
+    print("GPU Name:", torch.cuda.get_device_name(0))
+else:
+    print("Using CPU")
 
 
 class RagService:
+    MAX_CONTEXT_CHARS_PER_DOC = 1200
+    MAX_CONTEXT_CHARS_TOTAL = 3500
+
     def __init__(self, llm, prompt_builder, retrieve, k: int = 3):
         self.k = k
         self.llm = llm
         self.prompt_builder = prompt_builder
         self.retrieve = retrieve
 
+        # ✅ Safe GPU check (không crash nữa)
+        if torch.cuda.is_available():
+            print("RagService using GPU:", torch.cuda.get_device_name(0))
+        else:
+            print("RagService using CPU")
+
     def normalize_question(self, question: Any) -> str:
         if question is None:
             return ""
         return str(question).strip()
+
+    def compact_text(self, text: str, limit: int) -> str:
+        compact = " ".join((text or "").split())
+        if len(compact) <= limit:
+            return compact
+        trimmed = compact[: max(limit - 3, 0)].rstrip()
+        if " " in trimmed:
+            trimmed = trimmed.rsplit(" ", 1)[0]
+        return f"{trimmed}..."
+
+    def select_docs(self, docs: list) -> list:
+        selected = []
+        seen = set()
+
+        for doc in docs:
+            metadata = doc.metadata or {}
+            key = (
+                metadata.get("source", "unknown"),
+                metadata.get("page", 0),
+                self.compact_text(doc.page_content, 120),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            selected.append(doc)
+
+        return selected
 
     def build_sources(self, docs: list) -> list[dict[str, Any]]:
         sources = []
@@ -53,13 +98,63 @@ class RagService:
         }
 
     def format_context(self, results: list) -> str:
-        return "\n\n".join(
-            f"[Tai lieu {i}] Nguon: {doc.metadata.get('source')}, Trang: {doc.metadata.get('page')}\n"
-            f"Noi dung: {doc.page_content}"
-            for i, doc in enumerate(results, 1)
-        )
+        blocks = []
+        total_chars = 0
 
-    def answer(self, question: str) -> dict[str, Any]:
+        for i, doc in enumerate(results, 1):
+            remaining = self.MAX_CONTEXT_CHARS_TOTAL - total_chars
+            if remaining <= 80:
+                break
+
+            per_doc_limit = min(self.MAX_CONTEXT_CHARS_PER_DOC, remaining)
+            content = self.compact_text(doc.page_content, per_doc_limit)
+            if not content:
+                continue
+
+            block = (
+                f"[Tai lieu {i}] Nguon: {doc.metadata.get('source', 'unknown')}, "
+                f"Trang: {doc.metadata.get('page', 0)}\n"
+                f"Noi dung: {content}"
+            )
+            blocks.append(block)
+            total_chars += len(block)
+
+        return "\n\n".join(blocks)
+
+    def invoke_with_fallback(self, question: str, docs: list):
+        prompt_template = self.prompt_builder.get_rag_prompt()
+        context = self.format_context(docs)
+        print(f"DEBUG prompt docs={len(docs)} context_chars={len(context)}")
+
+        prompt = prompt_template.invoke({
+            "context": context,
+            "question": question
+        })
+
+        try:
+            return self.llm.invoke(prompt), docs
+        except Exception as e:
+            print(f"ERROR: {e}")
+
+            if len(docs) <= 1:
+                raise
+
+            fallback_docs = docs[:1]
+            fallback_context = self.format_context(fallback_docs)
+
+            print(
+                f"DEBUG retry with smaller context docs={len(fallback_docs)} "
+                f"context_chars={len(fallback_context)}"
+            )
+
+            fallback_prompt = prompt_template.invoke({
+                "context": fallback_context,
+                "question": question
+            })
+
+            return self.llm.invoke(fallback_prompt), fallback_docs
+
+    def answer(self, question: str, filter=None) -> dict[str, Any]:
         start = time.time()
         question = self.normalize_question(question)
 
@@ -71,23 +166,29 @@ class RagService:
                 latency=time.time() - start,
             )
 
-        docs = self.retrieve.retrieve(question)
+        # ✅ truyền filter xuống retriever
+        raw_docs = self.retrieve.retrieve(question, filter=filter)
+        docs = self.select_docs(raw_docs)
+
         if not docs:
+            msg = (
+                "Tôi không tìm thấy thông tin phù hợp trong các tài liệu được chọn."
+                if filter
+                else "Tôi không tìm thấy thông tin phù hợp."
+            )
             return self.build_response(
                 question=question,
-                answer="Toi khong tim thay thong tin phu hop.",
+                answer=msg,
                 docs=[],
                 latency=time.time() - start,
             )
 
-        context = self.format_context(docs)
-        prompt = self.prompt_builder.get_rag_prompt().format(context=context, question=question)
-        response = self.llm.invoke(prompt)
+        response, docs_used = self.invoke_with_fallback(question, docs)
         answer_text = getattr(response, "content", str(response)).strip()
 
         return self.build_response(
             question=question,
             answer=answer_text,
-            docs=docs,
+            docs=docs_used,
             latency=time.time() - start,
         )
