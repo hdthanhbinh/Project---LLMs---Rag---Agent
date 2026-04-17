@@ -2,15 +2,9 @@ from typing import Any
 import time
 import torch
 
-
-# ✅ Optional: log GPU khi load file
 print("CUDA available:", torch.cuda.is_available())
 if torch.cuda.is_available():
     print("GPU Name:", torch.cuda.get_device_name(0))
-else:
-    print("Using CPU")
-
-
 class RagService:
     MAX_CONTEXT_CHARS_PER_DOC = 1200
     MAX_CONTEXT_CHARS_TOTAL = 3500
@@ -20,12 +14,6 @@ class RagService:
         self.llm = llm
         self.prompt_builder = prompt_builder
         self.retrieve = retrieve
-
-        # ✅ Safe GPU check (không crash nữa)
-        if torch.cuda.is_available():
-            print("RagService using GPU:", torch.cuda.get_device_name(0))
-        else:
-            print("RagService using CPU")
 
     def normalize_question(self, question: Any) -> str:
         if question is None:
@@ -56,6 +44,7 @@ class RagService:
                 continue
             seen.add(key)
             selected.append(doc)
+            
 
         return selected
 
@@ -125,46 +114,32 @@ class RagService:
         prompt_template = self.prompt_builder.get_rag_prompt()
         context = self.format_context(docs)
         print(f"DEBUG prompt docs={len(docs)} context_chars={len(context)}")
-
-        prompt = prompt_template.invoke({
-            "context": context,
-            "question": question
-        })
+        prompt = prompt_template.invoke({"context": context, "question": question})
 
         try:
             return self.llm.invoke(prompt), docs
-        except Exception as e:
+        except Exception as e:  # ✅ bind 'e'
             print(f"ERROR: {e}")
-
             if len(docs) <= 1:
                 raise
 
             fallback_docs = docs[:1]
             fallback_context = self.format_context(fallback_docs)
-
-            print(
-                f"DEBUG retry with smaller context docs={len(fallback_docs)} "
-                f"context_chars={len(fallback_context)}"
+            print(f"DEBUG retry with smaller context docs={len(fallback_docs)} "
+                f"context_chars={len(fallback_context)}")
+            fallback_prompt = prompt_template.invoke(
+                {"context": fallback_context, "question": question}
             )
-
-            fallback_prompt = prompt_template.invoke({
-                "context": fallback_context,
-                "question": question
-            })
-
             return self.llm.invoke(fallback_prompt), fallback_docs
 
-    def answer(self, question: str, filter=None) -> dict[str, Any]:
+    def answer(self, question: str,
+           filter=None) -> dict[str, Any]:
         start = time.time()
         question = self.normalize_question(question)
 
         if not question:
-            return self.build_response(
-                question=question,
-                answer="",
-                docs=[],
-                latency=time.time() - start,
-            )
+            return self.build_response(question=question, answer="",
+                                    docs=[], latency=time.time() - start)
 
         # ✅ truyền filter xuống retriever
         raw_docs = self.retrieve.retrieve(question, filter=filter)
@@ -173,22 +148,14 @@ class RagService:
         if not docs:
             msg = (
                 "Tôi không tìm thấy thông tin phù hợp trong các tài liệu được chọn."
-                if filter
-                else "Tôi không tìm thấy thông tin phù hợp."
+                if filter else
+                "Tôi không tìm thấy thông tin phù hợp."
             )
-            return self.build_response(
-                question=question,
-                answer=msg,
-                docs=[],
-                latency=time.time() - start,
-            )
+            return self.build_response(question=question, answer=msg,
+                                    docs=[], latency=time.time() - start)
 
         response, docs_used = self.invoke_with_fallback(question, docs)
         answer_text = getattr(response, "content", str(response)).strip()
 
-        return self.build_response(
-            question=question,
-            answer=answer_text,
-            docs=docs_used,
-            latency=time.time() - start,
-        )
+        return self.build_response(question=question, answer=answer_text,
+                                docs=docs_used, latency=time.time() - start)

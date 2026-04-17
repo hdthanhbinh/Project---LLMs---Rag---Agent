@@ -1,14 +1,10 @@
 # app.py
-# Người 1 – AI Engineer: RAG Chain core
-# Tích hợp với backend của Người 2 (src/backend/)
-
 import sys
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from pathlib import Path
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
-
-from pathlib import Path
 
 from src.backend.llm import get_llm
 from src.backend.prompt_builder import PromptBuilder
@@ -20,152 +16,144 @@ from src.backend.vector_store import (
     load_vector_store,
     INDEX_DIR,
 )
-from src.backend.history_store import add_entry, get_all_history, clear  # Người 2: lịch sử hội thoại
-from src.processor import load_document, split_text
+from src.backend.history_store import add_entry, get_all_history, clear
+from src.processor import load_document, split_text, get_embedding_model
 
 
-# ------------------------------------------------------------------ #
-#  DocumentFilter — dùng để lọc tài liệu khi hỏi đáp                  #
-#  (tương đương DocumentFilter trong src/api/main.py của Người 2)     #
-# ------------------------------------------------------------------ #
 @dataclass
 class DocumentFilter:
     """
     Bộ lọc metadata khi tìm kiếm trong FAISS.
-    Người 3 (Streamlit) có thể truyền filter này vào ask_with_sources()
-    để giới hạn tìm kiếm chỉ trong 1 file cụ thể.
-
-    Ví dụ:
-        f = DocumentFilter(sources=["gutenberg.pdf"])
-        result = rag.ask_with_sources("Tóm tắt nội dung?", filter=f)
+    sources: list tên file gốc, vd ["Nhom28_(Cau2-3).pdf", "Cau2.docx"]
     """
-    sources: list[str] | None = None       # lọc theo tên file, vd: ["gutenberg.pdf"]
-    file_type: str | None = None           # lọc theo loại: "pdf" hoặc "docx"
-    date_from: str | None = None           # lọc theo ngày upload từ (ISO string)
-    date_to: str | None = None             # lọc theo ngày upload đến (ISO string)
+    sources: list[str] | None = None
+    file_type: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
 
 
-# ------------------------------------------------------------------ #
-#  RAGChain — lớp trung tâm điều phối toàn bộ pipeline RAG            #
-# ------------------------------------------------------------------ #
 class RAGChain:
     """
-    Điều phối pipeline RAG hoàn chỉnh, tích hợp backend của Người 2:
-      - HybridRetriever  : FAISS semantic + BM25 keyword (RRF scoring)
-      - RagService       : sinh câu trả lời + trả về sources + latency
-      - history_store    : lưu mỗi Q&A vào data/chat_history.json
-      - DocumentFilter   : lọc tìm kiếm theo metadata (tên file, loại, ngày)
-
-    Sơ đồ luồng dữ liệu:
-      file_path
-        → load_document()        # Người 4: đọc PDF/DOCX → list[Document]
-        → split_text()           # Người 4: chia chunks có metadata
-        → build_vector_store()   # Người 2: tạo FAISS index
-        → save_vector_store()    # Người 2: lưu xuống src/faiss_index/
-        → HybridRetriever        # Người 2: semantic + keyword + filter
-        → RagService.answer()    # Người 2: sinh câu trả lời
-        → add_entry()            # Người 2: lưu Q&A vào chat_history.json
+    Pipeline RAG hỗ trợ multi-document:
+      - Mỗi lần upload file mới sẽ MERGE vào index hiện có (không ghi đè)
+      - source metadata = tên file GỐC (không phải tên file tạm)
+      - DocumentFilter lọc đúng theo tên file gốc
+      - Hỗ trợ xoá từng file khỏi index
     """
 
     def __init__(self):
-        self.vectorstore = None     # FAISS index
-        self.rag_service = None     # RagService của Người 2
-        self.chunks = []            # giữ lại để KeywordRetriever index BM25
+        self.vectorstore  = None
+        self.rag_service  = None
+        self.all_chunks   = []      # tất cả chunks của mọi file đã nạp
+        self.loaded_files = {}      # { original_name: [chunk, ...] }
 
-        # Khởi tạo LLM và PromptBuilder từ backend Người 2
-        self.llm = get_llm()                    # ChatOllama(qwen2.5:1.5b, temperature=0.1)
-        self.prompt_builder = PromptBuilder()   # tự động detect ngôn ngữ Anh/Việt
-
-    # ------------------------------------------------------------------ #
-    #  BƯỚC 1: Nhận file path → tạo FAISS vectorstore                     #
-    # ------------------------------------------------------------------ #
-    def build_vectorstore(self, file_path: str) -> int:
-        """
-        Load document → split chunks (có metadata) → tạo FAISS → lưu disk.
-
-        Metadata mỗi chunk:
-            { "source": "file.pdf", "file_type": "pdf", "date_uploaded": "..." }
-        Lưu ý: file_type KHÔNG có dấu chấm đầu (Người 4 đã cập nhật).
-
-        Trả về số chunks đã được index.
-        """
-        # Bước 1a: Load file → list[Document] có metadata đầy đủ
-        docs = load_document(file_path)
-
-        # Bước 1b: Chia nhỏ thành chunks → list[Document]
-        self.chunks = split_text(docs)
-
-        # Bước 1c: Tạo FAISS index (hàm của Người 2, tự gọi get_embedding_model)
-        self.vectorstore = build_vector_store(self.chunks)
-
-        # Bước 1d: Lưu xuống src/faiss_index/ để tái sử dụng khi khởi động lại
-        save_vector_store(self.vectorstore)
-
-        return len(self.chunks)
+        self.llm            = get_llm()
+        self.prompt_builder = PromptBuilder()
 
     # ------------------------------------------------------------------ #
-    #  BƯỚC 2: Tạo RagService + HybridRetriever                           #
+    #  Thêm 1 file vào index (merge, không ghi đè)                         #
     # ------------------------------------------------------------------ #
-    def build_chain(self):
+    def add_document(self, file_path: str, original_name: str) -> int:
         """
-        Khởi tạo HybridRetriever và RagService.
+        Load file từ file_path, nhưng gán source = original_name (tên gốc).
+        Merge vào FAISS index hiện có thay vì tạo mới.
 
-        HybridRetriever (Người 2) dùng RRF scoring:
-          - SemanticRetriever: FAISS similarity (tìm theo nghĩa)
-          - KeywordRetriever:  BM25 (tìm theo từ khóa chính xác)
-          → Kết quả tốt hơn dùng đơn lẻ, đặc biệt với tiếng Việt
+        Args:
+            file_path:     đường dẫn file tạm trên disk (vd /tmp/tmpXXX.pdf)
+            original_name: tên file gốc người dùng upload (vd "Nhom28_(Cau2-3).pdf")
 
-        RagService (Người 2) có thêm:
-          - Giới hạn context (3500 ký tự tổng, 1200/doc)
-          - Dedup chunks trùng lặp
-          - Fallback: nếu LLM lỗi → thử lại với ít context hơn
-          - Nhận filter để lọc theo metadata
+        Returns:
+            số chunks được thêm vào index
         """
+        docs   = load_document(file_path)
+        chunks = split_text(docs)
+
+        # Ghi đè source = tên file GỐC để filter hoạt động đúng
+        for chunk in chunks:
+            chunk.metadata["source"] = original_name
+
+        # Lưu vào registry
+        self.loaded_files[original_name] = chunks
+        self.all_chunks = [c for cs in self.loaded_files.values() for c in cs]
+
+        embedding = get_embedding_model()
+
         if self.vectorstore is None:
-            raise ValueError("Gọi build_vectorstore() trước!")
+            # Lần đầu: tạo mới
+            self.vectorstore = build_vector_store(chunks)
+        else:
+            # Lần sau: merge file mới vào index hiện có
+            from langchain_community.vectorstores import FAISS
+            new_vs = FAISS.from_documents(chunks, embedding)
+            self.vectorstore.merge_from(new_vs)
 
-        semantic_retriever = SemanticRetriever(
-            vector_store=self.vectorstore,
-            k=4,
-        )
+        save_vector_store(self.vectorstore)
+        self._rebuild_service()
 
-        keyword_retriever = KeywordRetriever(
-            documents=self.chunks,
-            k=3,
-        )
+        return len(chunks)
 
-        # alpha=0.5: cân bằng 50% semantic + 50% keyword
-        hybrid_retriever = HybridRetriever(
-            semantic_retriever=semantic_retriever,
-            keyword_retriever=keyword_retriever,
-            alpha=0.5,
-            top_k=4,
-        )
+    def _rebuild_service(self):
+        """Rebuild HybridRetriever + RagService từ vectorstore + all_chunks hiện tại."""
+        if self.vectorstore is None or not self.all_chunks:
+            self.rag_service = None
+            return
+
+        semantic = SemanticRetriever(vector_store=self.vectorstore, k=4)
+        keyword  = KeywordRetriever(documents=self.all_chunks, k=3)
+        hybrid   = HybridRetriever(semantic, keyword, alpha=0.5, top_k=4)
 
         self.rag_service = RagService(
             llm=self.llm,
             prompt_builder=self.prompt_builder,
-            retrieve=hybrid_retriever,
+            retrieve=hybrid,
             k=4,
         )
 
     # ------------------------------------------------------------------ #
-    #  BƯỚC 3a: Hỏi đáp — trả về string đơn giản                         #
+    #  Load index từ disk khi khởi động lại app                            #
     # ------------------------------------------------------------------ #
-    def ask(self, question: str, filter: DocumentFilter | None = None) -> str:
-        """
-        Gửi câu hỏi → nhận câu trả lời dạng string.
-        Tự động lưu Q&A vào data/chat_history.json.
-
-        Args:
-            question: câu hỏi của người dùng
-            filter:   DocumentFilter để giới hạn tìm kiếm (tuỳ chọn)
-        """
-        result = self.ask_with_sources(question, filter=filter)
-        return result["answer"]
+    def load_from_disk_and_build(self) -> bool:
+        if not INDEX_DIR.exists():
+            return False
+        try:
+            self.vectorstore = load_vector_store()
+            self.all_chunks  = list(self.vectorstore.docstore._dict.values())
+            # Khôi phục loaded_files từ metadata source
+            for chunk in self.all_chunks:
+                src = chunk.metadata.get("source", "unknown")
+                self.loaded_files.setdefault(src, []).append(chunk)
+            self._rebuild_service()
+            return True
+        except Exception as e:
+            print(f"Không thể load index từ disk: {e}")
+            return False
 
     # ------------------------------------------------------------------ #
-    #  BƯỚC 3b: Hỏi đáp — trả về đầy đủ dict (answer + sources + meta)   #
+    #  Xoá 1 file khỏi index                                              #
+    # ------------------------------------------------------------------ #
+    def remove_document(self, original_name: str) -> bool:
+        """
+        Xoá 1 file khỏi index. Rebuild lại FAISS từ các file còn lại.
+        Trả về True nếu xoá thành công.
+        """
+        if original_name not in self.loaded_files:
+            return False
+
+        del self.loaded_files[original_name]
+        self.all_chunks = [c for cs in self.loaded_files.values() for c in cs]
+
+        if not self.all_chunks:
+            self.vectorstore = None
+            self.rag_service = None
+            return True
+
+        self.vectorstore = build_vector_store(self.all_chunks)
+        save_vector_store(self.vectorstore)
+        self._rebuild_service()
+        return True
+
+    # ------------------------------------------------------------------ #
+    #  Hỏi đáp                                                            #
     # ------------------------------------------------------------------ #
     def ask_with_sources(
         self,
@@ -173,20 +161,8 @@ class RAGChain:
         filter: DocumentFilter | None = None,
     ) -> dict:
         """
-        Gửi câu hỏi → nhận dict đầy đủ:
-          {
-            "question": "...",
-            "answer":   "...",
-            "sources":  [{ index, source, page, content }, ...],
-            "meta":     { k, latency, model }
-          }
-
-        Tự động lưu vào data/chat_history.json sau mỗi lần hỏi.
-
-        Args:
-            question: câu hỏi của người dùng
-            filter:   DocumentFilter để lọc tài liệu (tuỳ chọn)
-                      Ví dụ: DocumentFilter(sources=["bao_cao.pdf"])
+        Trả về dict: { question, answer, sources, meta }
+        Tự động lưu vào data/chat_history.json.
         """
         if self.rag_service is None:
             return {
@@ -196,10 +172,8 @@ class RAGChain:
                 "meta": {},
             }
 
-        # Gọi RagService (Người 2) — filter được truyền xuống HybridRetriever
         result = self.rag_service.answer(question, filter=filter)
 
-        # Lưu vào data/chat_history.json (Người 2: history_store)
         try:
             add_entry(
                 question=result["question"],
@@ -212,96 +186,43 @@ class RAGChain:
 
         return result
 
+    def ask(self, question: str, filter: DocumentFilter | None = None) -> str:
+        return self.ask_with_sources(question, filter=filter)["answer"]
+
     # ------------------------------------------------------------------ #
-    #  Quản lý lịch sử hội thoại                                          #
+    #  Danh sách file đã nạp                                              #
+    # ------------------------------------------------------------------ #
+    def get_loaded_files(self) -> list[str]:
+        """Trả về list tên file gốc đã được index."""
+        return list(self.loaded_files.keys())
+
+    # ------------------------------------------------------------------ #
+    #  Quản lý lịch sử                                                    #
     # ------------------------------------------------------------------ #
     def get_history(self) -> list:
-        """
-        Lấy toàn bộ lịch sử Q&A từ data/chat_history.json.
-        Người 3 (Streamlit) dùng để hiển thị trong sidebar.
-
-        Mỗi entry:
-            { id, question, answer, sources, meta, timestamp }
-        """
         return get_all_history()
 
     def clear_history(self) -> None:
-        """
-        Xoá toàn bộ lịch sử trong data/chat_history.json.
-        Gọi khi người dùng bấm nút 'Xoá chat'.
-        """
         clear()
-
-    # ------------------------------------------------------------------ #
-    #  Hàm tiện ích: gộp bước 1 + 2                                       #
-    # ------------------------------------------------------------------ #
-    def load_and_build(self, file_path: str) -> int:
-        """
-        Gộp build_vectorstore() + build_chain() lại thành 1 lệnh.
-        Người 3 (Streamlit) gọi hàm này sau khi user upload file.
-        Trả về số chunks để hiển thị thông báo trên UI.
-        """
-        num_chunks = self.build_vectorstore(file_path)
-        self.build_chain()
-        return num_chunks
-
-    def load_from_disk_and_build(self) -> bool:
-        """
-        Tải FAISS index đã lưu từ src/faiss_index/ (không cần upload lại).
-        Dùng khi khởi động lại app mà index vẫn còn trên disk.
-
-        Trả về True nếu load thành công, False nếu chưa có index.
-        """
-        if not INDEX_DIR.exists():
-            return False
-
-        try:
-            self.vectorstore = load_vector_store()
-            # Lấy Document objects từ docstore để khởi tạo KeywordRetriever
-            self.chunks = list(self.vectorstore.docstore._dict.values())
-            self.build_chain()
-            return True
-        except Exception as e:
-            print(f"Không thể load index từ disk: {e}")
-            return False
 
 
 # ------------------------------------------------------------------ #
-#  Chạy thử nhanh từ terminal (không cần Streamlit)                   #
+#  Chạy thử từ terminal                                                #
 # ------------------------------------------------------------------ #
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("Cách dùng: python app.py <đường_dẫn_file> <câu_hỏi>")
-        print('Ví dụ:     python app.py data/report/gutenberg.pdf "Tài liệu này nói về gì?"')
+        print("Dùng: python app.py <file> <câu_hỏi>")
         sys.exit(1)
 
-    file_path = sys.argv[1]
-    question  = sys.argv[2]
+    file_path     = sys.argv[1]
+    question      = sys.argv[2]
+    original_name = Path(file_path).name
 
-    print(f"Đang nạp file: {file_path}")
     rag = RAGChain()
-    num = rag.load_and_build(file_path)
-    print(f"Đã index {num} chunks. Đang hỏi...\n")
+    n   = rag.add_document(file_path, original_name)
+    print(f"Đã index {n} chunks từ '{original_name}'")
 
-    # Hỏi không filter
     result = rag.ask_with_sources(question)
-    print(f"Câu trả lời:\n{result['answer']}")
-
-    if result["sources"]:
-        print(f"\nNguồn trích dẫn:")
-        for src in result["sources"]:
-            print(f"  [{src['index']}] {src['source']} — trang {src['page']}")
-
-    print(f"\nLatency : {result['meta'].get('latency')}s")
-    print(f"Model   : {result['meta'].get('model')}")
-
-    # Thử filter — chỉ tìm trong file vừa upload
-    file_name = Path(file_path).name
-    print(f"\n--- Hỏi lại với filter chỉ file '{file_name}' ---")
-    f = DocumentFilter(sources=[file_name])
-    result2 = rag.ask_with_sources(question, filter=f)
-    print(f"Câu trả lời:\n{result2['answer']}")
-
-    # Xem lịch sử
-    history = rag.get_history()
-    print(f"\nLịch sử: {len(history)} câu hỏi đã lưu.")
+    print(f"\nCâu trả lời:\n{result['answer']}")
+    for src in result["sources"]:
+        print(f"  [{src['index']}] {src['source']} — trang {src['page']}")
