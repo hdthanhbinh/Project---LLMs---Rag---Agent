@@ -2,6 +2,7 @@
 
 import sys
 import os
+import time
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -19,19 +20,20 @@ from app import RAGChain, DocumentFilter
 #  Cấu hình trang                                                      #
 # ------------------------------------------------------------------ #
 st.set_page_config(
-    page_title="SmartDoc AI",
+    page_title="SmartDoc AI — RAG vs CoRAG",
     page_icon="📄",
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
 
 # ------------------------------------------------------------------ #
 #  CSS                                                                 #
 # ------------------------------------------------------------------ #
 st.markdown("""
 <style>
-[data-testid="stSidebar"] { background-color: #2E2C33; }
+[data-testid="stSidebar"] {
+    background-color: #2E2C33;
+}
 [data-testid="stSidebar"] p,
 [data-testid="stSidebar"] span,
 [data-testid="stSidebar"] label,
@@ -42,40 +44,74 @@ st.markdown("""
     border: 1px solid #666 !important;
 }
 [data-testid="stSidebar"] .stButton button:hover {
-    background-color: #555C63 !important;
-    border-color: #888 !important;
+    background-color: #555C63 !important; border-color: #888 !important;
 }
-.user-bubble {
-    background: #007BFF; color: white;
-    padding: 10px 16px;
-    border-radius: 18px 18px 4px 18px;
-    margin: 6px 0; max-width: 80%; margin-left: auto; word-wrap: break-word;
+
+/* Khung RAG */
+.rag-box {
+    border: 2px solid #007BFF;
+    border-radius: 12px;
+    padding: 16px;
+    background: #F0F7FF;
+    color: #1a1a1a;
+    min-height: 120px;
+    margin-bottom: 8px;
 }
-.ai-bubble {
-    background: #F1F3F5; color: #212529;
-    padding: 10px 16px;
-    border-radius: 18px 18px 18px 4px;
-    margin: 6px 0; max-width: 80%; word-wrap: break-word;
+/* Khung CoRAG */
+.corag-box {
+    border: 2px solid #28A745;
+    border-radius: 12px;
+    padding: 16px;
+    background: #F0FFF4;
+    color: #1a1a1a;
+    min-height: 120px;
+    margin-bottom: 8px;
 }
+/* Header của mỗi khung */
+.rag-header {
+    color: #007BFF; font-weight: 700; font-size: 1.05em; margin-bottom: 8px;
+}
+.corag-header {
+    color: #28A745; font-weight: 700; font-size: 1.05em; margin-bottom: 8px;
+}
+/* Sub-question chip */
+.subq-chip {
+    display: inline-block;
+    background: #D4EDDA; color: #155724;
+    border: 1px solid #C3E6CB;
+    border-radius: 10px; padding: 2px 10px;
+    font-size: 0.8em; margin: 2px 4px 2px 0;
+}
+/* Source box */
 .source-box {
     background: #FFF8E1; border-left: 3px solid #FFC107;
-    padding: 8px 12px; border-radius: 4px;
-    font-size: 0.85em; margin-top: 6px; color: #212529;
-}
-.history-box {
-    background: #3A3840; border-left: 3px solid #007BFF;
     padding: 6px 10px; border-radius: 4px;
-    font-size: 0.82em; margin-bottom: 6px; color: #E0E0E0;
+    font-size: 0.82em; margin-top: 4px; color: #212529;
+}
+/* Metric badge */
+.badge-rag   { background:#007BFF22; color:#007BFF; border:1px solid #007BFF55;
+               border-radius:8px; padding:2px 10px; font-size:0.82em; }
+.badge-corag { background:#28A74522; color:#28A745; border:1px solid #28A74555;
+               border-radius:8px; padding:2px 10px; font-size:0.82em; }
+/* Chat bubbles */
+.user-bubble {
+    background:#007BFF; color:white; padding:10px 16px;
+    border-radius:18px 18px 4px 18px; margin:6px 0;
+    max-width:80%; margin-left:auto; word-wrap:break-word;
+}
+/* History box */
+.history-box {
+    background:#3A3840; border-left:3px solid #007BFF;
+    padding:6px 10px; border-radius:4px;
+    font-size:0.82em; margin-bottom:6px; color:#E0E0E0;
 }
 .file-tag {
-    display: inline-block;
-    background: #007BFF22; color: #007BFF;
-    border: 1px solid #007BFF55;
-    border-radius: 12px; padding: 2px 10px;
-    font-size: 0.82em; margin: 2px 4px 2px 0;
+    display:inline-block; background:#007BFF22; color:#007BFF;
+    border:1px solid #007BFF55; border-radius:12px;
+    padding:2px 10px; font-size:0.82em; margin:2px 4px 2px 0;
 }
-.main-header { color: #007BFF; font-size: 2em; font-weight: 700; margin-bottom: 0; }
-.sub-header  { color: #6C757D; font-size: 1em; margin-top: 0; margin-bottom: 24px; }
+.main-header { color:#007BFF; font-size:2em; font-weight:700; margin-bottom:0; }
+.sub-header  { color:#6C757D; font-size:1em; margin-top:0; margin-bottom:16px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -88,10 +124,15 @@ def init_session():
         st.session_state.rag = RAGChain()
         st.session_state.index_ready = st.session_state.rag.load_from_disk_and_build()
 
-    if "chat_history"   not in st.session_state: st.session_state.chat_history   = []
-    if "index_ready"    not in st.session_state: st.session_state.index_ready    = False
-    if "filter_enabled" not in st.session_state: st.session_state.filter_enabled = False
-    if "filter_source"  not in st.session_state: st.session_state.filter_source  = None
+    defaults = {
+        "chat_history":   [],    # list of { question, rag, corag }
+        "index_ready":    False,
+        "filter_source":  None,
+        "filter_enabled": False,
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
 
 init_session()
 
@@ -103,24 +144,19 @@ with st.sidebar:
     st.markdown("## 📄 SmartDoc AI")
     st.markdown("---")
 
-    # Hướng dẫn
     st.markdown("### 📖 Hướng dẫn")
     st.markdown("""
-1. Upload file **PDF** hoặc **DOCX** (có thể nhiều file)
-2. Chờ hệ thống xử lý tài liệu
-3. Đặt câu hỏi về nội dung
-4. Xem câu trả lời kèm nguồn trích dẫn
+1. Upload **PDF / DOCX** (nhiều file)
+2. Đặt câu hỏi → hệ thống chạy **RAG** và **CoRAG** song song
+3. So sánh kết quả, thời gian xử lý
 """)
-
     st.markdown("---")
 
-    # Cấu hình
     st.markdown("### ⚙️ Cấu hình")
     st.markdown("**Model:** `qwen2.5:1.5b`")
     st.markdown("**Embedding:** `MPNet 768-dim`")
     st.markdown("**Retriever:** Hybrid (FAISS + BM25)")
 
-    # Danh sách file đã nạp
     loaded = st.session_state.rag.get_loaded_files()
     if loaded:
         st.success(f"✅ Đã index **{len(loaded)}** file")
@@ -129,30 +165,20 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # ---------------------------------------------------------------- #
-    #  Bộ lọc tài liệu — FIX lỗi phải click 2 lần                     #
-    #  Dùng key cố định + on_change callback thay vì đọc value trực tiếp#
-    # ---------------------------------------------------------------- #
+    # Bộ lọc
     st.markdown("### 🔍 Lọc tài liệu")
-
     if loaded and st.session_state.index_ready:
-        # Selectbox chọn file để lọc — None = tìm toàn bộ
-        options = ["🌐 Tất cả tài liệu"] + loaded
+        options     = ["🌐 Tất cả tài liệu"] + loaded
         current_idx = 0
         if st.session_state.filter_source in loaded:
             current_idx = loaded.index(st.session_state.filter_source) + 1
 
-        selected = st.selectbox(
-            "Tìm trong:",
-            options=options,
-            index=current_idx,
-            key="filter_selectbox",
-        )
-
+        selected = st.selectbox("Tìm trong:", options=options, index=current_idx,
+                                key="filter_selectbox")
         if selected == "🌐 Tất cả tài liệu":
             st.session_state.filter_source  = None
             st.session_state.filter_enabled = False
-            st.caption("🌐 Đang tìm kiếm toàn bộ tài liệu")
+            st.caption("🌐 Tìm kiếm toàn bộ tài liệu")
         else:
             st.session_state.filter_source  = selected
             st.session_state.filter_enabled = True
@@ -162,15 +188,15 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # Xoá dữ liệu
+    # Xoá
     st.markdown("### 🗑️ Xoá dữ liệu")
-    col1, col2 = st.columns(2)
-    with col1:
+    c1, c2 = st.columns(2)
+    with c1:
         if st.button("Xoá chat", use_container_width=True):
             st.session_state.chat_history = []
             st.session_state.rag.clear_history()
             st.rerun()
-    with col2:
+    with c2:
         if st.button("Reset index", use_container_width=True):
             st.session_state.rag.clear_history()
             st.session_state.rag          = RAGChain()
@@ -182,53 +208,53 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # Lịch sử hội thoại
-    st.markdown("### 💬 Lịch sử hội thoại")
+    # Lịch sử
+    st.markdown("### 💬 Lịch sử")
     try:
-        history_entries = st.session_state.rag.get_history()
+        hist = st.session_state.rag.get_history()
     except Exception:
-        history_entries = []
+        hist = []
 
-    if history_entries:
-        for entry in reversed(history_entries[-10:]):
+    if hist:
+        for entry in reversed(hist[-8:]):
             q   = entry.get("question", "")
-            q_p = q[:60] + ("..." if len(q) > 60 else "")
+            qp  = q[:55] + ("..." if len(q) > 55 else "")
             ts  = entry.get("timestamp", "")[:16].replace("T", " ")
             lat = entry.get("meta", {}).get("latency", "")
-            lat_str = f" · {lat}s" if lat else ""
+            lats = f" · {lat}s" if lat else ""
+            method = entry.get("meta", {}).get("method", "")
+            badge = f'<span class="badge-corag">CoRAG</span>' if method == "corag" \
+                    else f'<span class="badge-rag">RAG</span>'
             st.markdown(
-                f'<div class="history-box">'
-                f'<b>#{entry.get("id","?")}</b> {q_p}<br>'
-                f'<span style="font-size:0.78em;color:#AAA;">{ts}{lat_str}</span>'
-                f'</div>',
+                f'<div class="history-box">{badge} {qp}<br>'
+                f'<span style="font-size:0.78em;color:#AAA;">{ts}{lats}</span></div>',
                 unsafe_allow_html=True,
             )
     else:
-        st.caption("_Chưa có lịch sử hội thoại._")
+        st.caption("_Chưa có lịch sử._")
 
 
 # ------------------------------------------------------------------ #
-#  Main area                                                           #
+#  Main                                                                #
 # ------------------------------------------------------------------ #
 st.markdown('<p class="main-header">📄 SmartDoc AI</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-header">Intelligent Document Q&A System</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-header">RAG vs CoRAG — So sánh song song</p>', unsafe_allow_html=True)
 
 # ------------------------------------------------------------------ #
-#  Upload file — hỗ trợ nhiều file, MERGE vào index                   #
+#  Upload                                                              #
 # ------------------------------------------------------------------ #
 st.markdown("### 📂 Upload tài liệu")
 
 uploaded_files = st.file_uploader(
-    label="Chọn file PDF hoặc DOCX (có thể chọn nhiều file)",
+    "Chọn file PDF hoặc DOCX (có thể chọn nhiều file)",
     type=["pdf", "docx"],
-    accept_multiple_files=True,   # ← cho phép chọn nhiều file
-    help="Tối đa 50MB/file. Hỗ trợ tiếng Việt và tiếng Anh.",
+    accept_multiple_files=True,
+    help="Tối đa 50MB/file.",
 )
 
 if uploaded_files:
-    already_loaded = st.session_state.rag.get_loaded_files()
-    new_files = [f for f in uploaded_files if f.name not in already_loaded]
-
+    already = st.session_state.rag.get_loaded_files()
+    new_files = [f for f in uploaded_files if f.name not in already]
     if new_files:
         for uf in new_files:
             with st.spinner(f"⏳ Đang xử lý **{uf.name}**..."):
@@ -237,75 +263,127 @@ if uploaded_files:
                     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                         tmp.write(uf.getbuffer())
                         tmp_path = tmp.name
-
-                    # Truyền tên GỐC để metadata source = tên gốc
                     n = st.session_state.rag.add_document(tmp_path, uf.name)
                     st.session_state.index_ready = True
                     os.unlink(tmp_path)
-                    st.success(f"✅ Đã thêm **{uf.name}** — {n} chunks")
-
+                    st.success(f"✅ **{uf.name}** — {n} chunks")
                 except Exception as e:
-                    st.error(f"❌ Lỗi khi xử lý **{uf.name}**: {e}")
+                    st.error(f"❌ {uf.name}: {e}")
         st.rerun()
     else:
-        loaded = st.session_state.rag.get_loaded_files()
-        st.info(f"✅ Tất cả file đã được nạp ({len(loaded)} file trong index)")
+        st.info(f"✅ Tất cả file đã được nạp ({len(already)} file)")
 
 st.markdown("---")
 
 # ------------------------------------------------------------------ #
-#  Chat                                                                #
+#  Hiển thị lịch sử chat (2 cột)                                      #
 # ------------------------------------------------------------------ #
-st.markdown("### 💬 Hỏi đáp")
+st.markdown("### 💬 Hỏi đáp — RAG vs CoRAG")
 
-for msg in st.session_state.chat_history:
-    if msg["role"] == "user":
+for turn in st.session_state.chat_history:
+    # Câu hỏi
+    st.markdown(
+        f'<div class="user-bubble">🧑 {turn["question"]}</div>',
+        unsafe_allow_html=True,
+    )
+
+    col_rag, col_corag = st.columns(2)
+
+    # ── Cột RAG ──
+    with col_rag:
+        r = turn.get("rag", {})
+        lat = r.get("meta", {}).get("latency", "—")
         st.markdown(
-            f'<div class="user-bubble">🧑 {msg["content"]}</div>',
+            f'<div class="rag-box">'
+            f'<div class="rag-header">⚡ RAG &nbsp;'
+            f'<span style="font-weight:400;font-size:0.85em;">({lat}s)</span></div>'
+            f'{r.get("answer","—")}'
+            f'</div>',
             unsafe_allow_html=True,
         )
-    else:
-        st.markdown(
-            f'<div class="ai-bubble">🤖 {msg["content"]}</div>',
-            unsafe_allow_html=True,
-        )
-        if msg.get("sources"):
-            with st.expander("📎 Nguồn trích dẫn", expanded=False):
-                for src in msg["sources"]:
+        if r.get("sources"):
+            with st.expander("📎 Nguồn (RAG)", expanded=False):
+                for src in r["sources"]:
                     st.markdown(
-                        f'<div class="source-box">'
-                        f'<b>[{src["index"]}]</b> 📄 {src["source"]} '
-                        f'— Trang {src["page"]}<br>'
-                        f'<i>{src["content"][:200]}{"..." if len(src["content"]) > 200 else ""}</i>'
+                        f'<div class="source-box"><b>[{src["index"]}]</b> '
+                        f'📄 {src["source"]} — Trang {src["page"]}<br>'
+                        f'<i>{src["content"][:180]}{"..." if len(src["content"])>180 else ""}</i>'
                         f'</div>',
                         unsafe_allow_html=True,
                     )
 
+    # ── Cột CoRAG ──
+    with col_corag:
+        c = turn.get("corag", {})
+        lat2 = c.get("meta", {}).get("latency", "—")
+        sub_qs = c.get("sub_questions", [])
+
+        # Hiển thị sub-questions
+        sub_html = ""
+        if sub_qs:
+            chips = "".join(f'<span class="subq-chip">🔍 {q}</span>' for q in sub_qs)
+            sub_html = f'<div style="margin-bottom:8px;">{chips}</div>'
+
+        st.markdown(
+            f'<div class="corag-box">'
+            f'<div class="corag-header">🧠 CoRAG &nbsp;'
+            f'<span style="font-weight:400;font-size:0.85em;">({lat2}s)</span></div>'
+            f'{sub_html}'
+            f'{c.get("answer","—")}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        if c.get("sources"):
+            with st.expander("📎 Nguồn (CoRAG)", expanded=False):
+                for src in c["sources"]:
+                    st.markdown(
+                        f'<div class="source-box"><b>[{src["index"]}]</b> '
+                        f'📄 {src["source"]} — Trang {src["page"]}<br>'
+                        f'<i>{src["content"][:180]}{"..." if len(src["content"])>180 else ""}</i>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+    # So sánh latency nhanh
+    try:
+        lat_rag   = float(turn["rag"]["meta"].get("latency", 0))
+        lat_corag = float(turn["corag"]["meta"].get("latency", 0))
+        faster = "RAG" if lat_rag <= lat_corag else "CoRAG"
+        diff   = abs(lat_rag - lat_corag)
+        st.caption(f"⏱ RAG: {lat_rag}s &nbsp;|&nbsp; CoRAG: {lat_corag}s &nbsp;→&nbsp; **{faster}** nhanh hơn {diff:.2f}s")
+    except Exception:
+        pass
+
+    st.markdown("---")
+
+
+# ------------------------------------------------------------------ #
+#  Input câu hỏi                                                       #
+# ------------------------------------------------------------------ #
 question = st.chat_input(
-    placeholder="Nhập câu hỏi về tài liệu... (Enter để gửi)",
+    placeholder="Nhập câu hỏi... (RAG và CoRAG sẽ chạy tuần tự)",
     disabled=not st.session_state.index_ready,
 )
 
 if question:
-    st.session_state.chat_history.append({"role": "user", "content": question, "sources": []})
-
-    # Xây dựng filter từ session state
+    # Build filter
     doc_filter = None
     if st.session_state.filter_enabled and st.session_state.filter_source:
         doc_filter = DocumentFilter(sources=[st.session_state.filter_source])
 
-    with st.spinner("🤔 Đang tìm kiếm và tạo câu trả lời..."):
-        try:
-            result  = st.session_state.rag.ask_with_sources(question, filter=doc_filter)
-            answer  = result.get("answer", "Không có câu trả lời.")
-            sources = result.get("sources", [])
-            meta    = result.get("meta", {})
-        except Exception as e:
-            answer, sources, meta = f"❌ Lỗi: {e}", [], {}
+    rag_chain = st.session_state.rag
 
-    st.session_state.chat_history.append({"role": "ai", "content": answer, "sources": sources})
-
-    if meta.get("latency"):
-        st.caption(f"⏱ {meta['latency']}s · model: {meta.get('model','unknown')}")
+    # Chạy TUẦN TỰ: RAG trước, CoRAG sau — đo thời gian chính xác từng bước
+    with st.spinner("⚡ Đang chạy RAG..."):
+        result_rag = rag_chain.ask_rag(question, doc_filter, save_history=True)
+ 
+    with st.spinner("🧠 Đang chạy CoRAG (decompose → retrieve → synthesize)..."):
+        result_corag = rag_chain.ask_corag(question, doc_filter, save_history=True)
+ 
+    st.session_state.chat_history.append({
+        "question": question,
+        "rag":      result_rag,
+        "corag":    result_corag,
+    })
 
     st.rerun()

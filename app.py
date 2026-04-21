@@ -9,6 +9,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
 from src.backend.llm import get_llm
 from src.backend.prompt_builder import PromptBuilder
 from src.backend.rag_service import RagService
+from src.backend.corag_service import CoRAGService
 from src.backend.retriever import HybridRetriever, KeywordRetriever, SemanticRetriever
 from src.backend.vector_store import (
     build_vector_store,
@@ -22,86 +23,70 @@ from src.processor import load_document, split_text, get_embedding_model
 
 @dataclass
 class DocumentFilter:
-    """
-    Bộ lọc metadata khi tìm kiếm trong FAISS.
-    sources: list tên file gốc, vd ["Nhom28_(Cau2-3).pdf", "Cau2.docx"]
-    """
-    sources: list[str] | None = None
-    file_type: str | None = None
-    date_from: str | None = None
-    date_to: str | None = None
+    sources:   list[str] | None = None
+    file_type: str | None       = None
+    date_from: str | None       = None
+    date_to:   str | None       = None
 
 
 class RAGChain:
     """
-    Pipeline RAG hỗ trợ multi-document:
-      - Mỗi lần upload file mới sẽ MERGE vào index hiện có (không ghi đè)
-      - source metadata = tên file GỐC (không phải tên file tạm)
-      - DocumentFilter lọc đúng theo tên file gốc
-      - Hỗ trợ xoá từng file khỏi index
+    Quản lý index + cung cấp cả RAG và CoRAG trên cùng 1 vectorstore.
+
+    RAG   : retrieve 1 lần → generate  (nhanh hơn)
+    CoRAG : decompose → retrieve nhiều lần → synthesize  (chính xác hơn)
     """
 
     def __init__(self):
         self.vectorstore  = None
-        self.rag_service  = None
-        self.all_chunks   = []      # tất cả chunks của mọi file đã nạp
-        self.loaded_files = {}      # { original_name: [chunk, ...] }
+        self.all_chunks   = []
+        self.loaded_files = {}   # { original_name: [chunk, ...] }
 
         self.llm            = get_llm()
         self.prompt_builder = PromptBuilder()
 
+        # Hai service chạy song song
+        self.rag_service   = None
+        self.corag_service = None
+
     # ------------------------------------------------------------------ #
-    #  Thêm 1 file vào index (merge, không ghi đè)                         #
+    #  Thêm file vào index (merge)                                         #
     # ------------------------------------------------------------------ #
     def add_document(self, file_path: str, original_name: str) -> int:
-        """
-        Load file từ file_path, nhưng gán source = original_name (tên gốc).
-        Merge vào FAISS index hiện có thay vì tạo mới.
-
-        Args:
-            file_path:     đường dẫn file tạm trên disk (vd /tmp/tmpXXX.pdf)
-            original_name: tên file gốc người dùng upload (vd "Nhom28_(Cau2-3).pdf")
-
-        Returns:
-            số chunks được thêm vào index
-        """
         docs   = load_document(file_path)
         chunks = split_text(docs)
 
-        # Ghi đè source = tên file GỐC để filter hoạt động đúng
         for chunk in chunks:
             chunk.metadata["source"] = original_name
 
-        # Lưu vào registry
         self.loaded_files[original_name] = chunks
         self.all_chunks = [c for cs in self.loaded_files.values() for c in cs]
 
         embedding = get_embedding_model()
 
         if self.vectorstore is None:
-            # Lần đầu: tạo mới
             self.vectorstore = build_vector_store(chunks)
         else:
-            # Lần sau: merge file mới vào index hiện có
             from langchain_community.vectorstores import FAISS
             new_vs = FAISS.from_documents(chunks, embedding)
             self.vectorstore.merge_from(new_vs)
 
         save_vector_store(self.vectorstore)
-        self._rebuild_service()
-
+        self._rebuild_services()
         return len(chunks)
 
-    def _rebuild_service(self):
-        """Rebuild HybridRetriever + RagService từ vectorstore + all_chunks hiện tại."""
+    def _rebuild_services(self):
+        """Rebuild cả RAG lẫn CoRAG từ cùng 1 vectorstore."""
         if self.vectorstore is None or not self.all_chunks:
-            self.rag_service = None
+            self.rag_service   = None
+            self.corag_service = None
             return
 
         semantic = SemanticRetriever(vector_store=self.vectorstore, k=4)
         keyword  = KeywordRetriever(documents=self.all_chunks, k=3)
         hybrid   = HybridRetriever(semantic, keyword, alpha=0.5, top_k=4)
 
+        # RAG dùng RagService gốc của backend
         self.rag_service = RagService(
             llm=self.llm,
             prompt_builder=self.prompt_builder,
@@ -109,8 +94,16 @@ class RAGChain:
             k=4,
         )
 
+        # CoRAG dùng CoRAGService mới — cùng LLM, cùng retriever
+        self.corag_service = CoRAGService(
+            llm=self.llm,
+            prompt_builder=self.prompt_builder,
+            retrieve=hybrid,
+            k=4,
+        )
+
     # ------------------------------------------------------------------ #
-    #  Load index từ disk khi khởi động lại app                            #
+    #  Load từ disk                                                        #
     # ------------------------------------------------------------------ #
     def load_from_disk_and_build(self) -> bool:
         if not INDEX_DIR.exists():
@@ -118,92 +111,113 @@ class RAGChain:
         try:
             self.vectorstore = load_vector_store()
             self.all_chunks  = list(self.vectorstore.docstore._dict.values())
-            # Khôi phục loaded_files từ metadata source
             for chunk in self.all_chunks:
                 src = chunk.metadata.get("source", "unknown")
                 self.loaded_files.setdefault(src, []).append(chunk)
-            self._rebuild_service()
+            self._rebuild_services()
             return True
         except Exception as e:
             print(f"Không thể load index từ disk: {e}")
             return False
 
     # ------------------------------------------------------------------ #
-    #  Xoá 1 file khỏi index                                              #
+    #  Xoá file khỏi index                                                 #
     # ------------------------------------------------------------------ #
     def remove_document(self, original_name: str) -> bool:
-        """
-        Xoá 1 file khỏi index. Rebuild lại FAISS từ các file còn lại.
-        Trả về True nếu xoá thành công.
-        """
         if original_name not in self.loaded_files:
             return False
-
         del self.loaded_files[original_name]
         self.all_chunks = [c for cs in self.loaded_files.values() for c in cs]
-
         if not self.all_chunks:
-            self.vectorstore = None
-            self.rag_service = None
+            self.vectorstore   = None
+            self.rag_service   = None
+            self.corag_service = None
             return True
-
         self.vectorstore = build_vector_store(self.all_chunks)
         save_vector_store(self.vectorstore)
-        self._rebuild_service()
+        self._rebuild_services()
         return True
 
     # ------------------------------------------------------------------ #
-    #  Hỏi đáp                                                            #
+    #  RAG: retrieve 1 lần → generate                                     #
     # ------------------------------------------------------------------ #
-    def ask_with_sources(
+    def ask_rag(
         self,
         question: str,
         filter: DocumentFilter | None = None,
+        save_history: bool = True,
     ) -> dict:
         """
-        Trả về dict: { question, answer, sources, meta }
-        Tự động lưu vào data/chat_history.json.
+        RAG thuần: retrieve top-k chunks → generate.
+        Trả về: { question, answer, sources, meta }
         """
         if self.rag_service is None:
-            return {
-                "question": question,
-                "answer": "Chưa nạp tài liệu. Hãy upload file trước.",
-                "sources": [],
-                "meta": {},
-            }
+            return _not_ready(question)
 
         result = self.rag_service.answer(question, filter=filter)
+        result["meta"]["method"] = "rag"
 
-        try:
-            add_entry(
-                question=result["question"],
-                ans=result["answer"],
-                sources=result["sources"],
-                meta=result["meta"],
-            )
-        except Exception as e:
-            print(f"Warning: không lưu được history: {e}")
-
+        if save_history:
+            _save(result)
         return result
 
-    def ask(self, question: str, filter: DocumentFilter | None = None) -> str:
-        return self.ask_with_sources(question, filter=filter)["answer"]
+    # ------------------------------------------------------------------ #
+    #  CoRAG: decompose → multi-retrieve → synthesize                     #
+    # ------------------------------------------------------------------ #
+    def ask_corag(
+        self,
+        question: str,
+        filter: DocumentFilter | None = None,
+        save_history: bool = True,
+    ) -> dict:
+        """
+        CoRAG: phân tách câu hỏi → retrieve nhiều lần → tổng hợp.
+        Trả về: { question, answer, sources, sub_questions, meta }
+        """
+        if self.corag_service is None:
+            return _not_ready(question)
+
+        result = self.corag_service.answer(question, filter=filter)
+
+        if save_history:
+            _save(result)
+        return result
 
     # ------------------------------------------------------------------ #
-    #  Danh sách file đã nạp                                              #
+    #  Tiện ích                                                            #
     # ------------------------------------------------------------------ #
     def get_loaded_files(self) -> list[str]:
-        """Trả về list tên file gốc đã được index."""
         return list(self.loaded_files.keys())
 
-    # ------------------------------------------------------------------ #
-    #  Quản lý lịch sử                                                    #
-    # ------------------------------------------------------------------ #
     def get_history(self) -> list:
         return get_all_history()
 
     def clear_history(self) -> None:
         clear()
+
+
+# ------------------------------------------------------------------ #
+#  Helpers nội bộ                                                      #
+# ------------------------------------------------------------------ #
+def _not_ready(question: str) -> dict:
+    return {
+        "question":      question,
+        "answer":        "Chưa nạp tài liệu. Hãy upload file trước.",
+        "sources":       [],
+        "sub_questions": [],
+        "meta":          {},
+    }
+
+def _save(result: dict):
+    try:
+        add_entry(
+            question=result["question"],
+            ans=result["answer"],
+            sources=result.get("sources", []),
+            meta=result.get("meta", {}),
+        )
+    except Exception as e:
+        print(f"Warning: không lưu được history: {e}")
 
 
 # ------------------------------------------------------------------ #
@@ -220,9 +234,19 @@ if __name__ == "__main__":
 
     rag = RAGChain()
     n   = rag.add_document(file_path, original_name)
-    print(f"Đã index {n} chunks từ '{original_name}'")
+    print(f"Đã index {n} chunks từ '{original_name}'\n")
 
-    result = rag.ask_with_sources(question)
-    print(f"\nCâu trả lời:\n{result['answer']}")
-    for src in result["sources"]:
-        print(f"  [{src['index']}] {src['source']} — trang {src['page']}")
+    print("=" * 60)
+    print("RAG")
+    print("=" * 60)
+    r1 = rag.ask_rag(question, save_history=False)
+    print(f"Trả lời: {r1['answer']}")
+    print(f"Latency: {r1['meta'].get('latency')}s")
+
+    print("\n" + "=" * 60)
+    print("CoRAG")
+    print("=" * 60)
+    r2 = rag.ask_corag(question, save_history=False)
+    print(f"Sub-questions: {r2.get('sub_questions', [])}")
+    print(f"Trả lời: {r2['answer']}")
+    print(f"Latency: {r2['meta'].get('latency')}s")
