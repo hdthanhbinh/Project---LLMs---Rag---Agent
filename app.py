@@ -1,193 +1,253 @@
 
 # app.py
-# Người 1 – AI Engineer: RAG Chain core
-
 import sys
 import os
+from dataclasses import dataclass
+from pathlib import Path
 
-from langchain_community.vectorstores import FAISS
-from langchain_ollama import OllamaLLM
-from langchain_classic.chains.retrieval_qa.base import RetrievalQA
-from langchain_core.prompts import PromptTemplate
 sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
-# Dùng 3 hàm riêng lẻ từ processor.py của Người 4
-# (thay vì process_pipeline() để lấy được Document objects có metadata)
-from processor import load_document, split_text, get_embedding_model
+
+from src.backend.llm import get_llm
+from src.backend.prompt_builder import PromptBuilder
+from src.backend.rag_service import RagService
+from src.backend.corag_service import CoRAGService
+from src.backend.retriever import HybridRetriever, KeywordRetriever, SemanticRetriever
+from src.backend.vector_store import (
+    build_vector_store,
+    save_vector_store,
+    load_vector_store,
+    INDEX_DIR,
+)
+from src.backend.history_store import add_entry, get_all_history, clear
+from src.processor import load_document, split_text, get_embedding_model
+
+
+@dataclass
+class DocumentFilter:
+    sources:   list[str] | None = None
+    file_type: str | None       = None
+    date_from: str | None       = None
+    date_to:   str | None       = None
 
 
 class RAGChain:
     """
-    Lớp trung tâm điều phối toàn bộ pipeline RAG.
-    Gồm 3 bước chính: build_vectorstore → build_chain → ask
+    Quản lý index + cung cấp cả RAG và CoRAG trên cùng 1 vectorstore.
 
-    Sơ đồ luồng dữ liệu:
-      file_path
-        → load_document()       # Người 4: đọc PDF/DOCX thành Document objects
-        → split_text()          # Người 4: chia nhỏ thành chunks có metadata
-        → FAISS.from_documents()# Bước này: embed + lưu vào vector index
-        → RetrievalQA chain     # Bước này: kết nối retriever + LLM + prompt
-        → ask(question)         # Bước này: trả về câu trả lời string
+    RAG   : retrieve 1 lần → generate  (nhanh hơn)
+    CoRAG : decompose → retrieve nhiều lần → synthesize  (chính xác hơn)
     """
 
     def __init__(self):
-        self.vectorstore = None   # FAISS index (được tạo sau khi upload file)
-        self.chain = None         # RetrievalQA chain (được tạo sau khi có vectorstore)
+        self.vectorstore  = None
+        self.all_chunks   = []
+        self.loaded_files = {}   # { original_name: [chunk, ...] }
+
+        self.llm            = get_llm()
+        self.prompt_builder = PromptBuilder()
+
+        # Hai service chạy song song
+        self.rag_service   = None
+        self.corag_service = None
 
     # ------------------------------------------------------------------ #
-    #  BƯỚC 1: Nhận file path → tạo FAISS vectorstore                     #
+    #  Thêm file vào index (merge)                                         #
     # ------------------------------------------------------------------ #
-    def build_vectorstore(self, file_path: str) -> int:
-        """
-        Gọi load_document() và split_text() từ processor.py của Người 4,
-        sau đó đưa vào FAISS để tạo vector index.
-
-        Dùng from_documents() thay vì from_texts() để giữ nguyên metadata
-        của từng chunk (source, file_type, date_uploaded) — cần thiết cho
-        citation tracking ở tuần 3.
-
-        Trả về số lượng chunks đã được index.
-        """
-        # Bước 1a: Load file → list[Document]
-        # Mỗi Document có page_content (nội dung) và metadata (nguồn gốc)
-        docs = load_document(file_path)
-
-        # Bước 1b: Chia nhỏ thành chunks → list[Document]
-        # Mỗi chunk kế thừa metadata từ Document gốc:
-        #   {
-        #     "source": "gutenberg.pdf",
-        #     "file_type": ".pdf",
-        #     "date_uploaded": "2026-04-06T..."
-        #   }
+    def add_document(self, file_path: str, original_name: str) -> int:
+        docs   = load_document(file_path)
         chunks = split_text(docs)
 
-        # Bước 1c: Lấy embedding model (MPNet 768-dim multilingual)
-        embedding_model = get_embedding_model()
+        for chunk in chunks:
+            chunk.metadata["source"] = original_name
 
-        # Bước 1d: Tạo FAISS index từ chunks + embedding model
-        # from_documents() tự động:
-        #   1. Embed từng chunk.page_content thành vector 768 chiều
-        #   2. Lưu vector + metadata vào in-memory FAISS index
-        self.vectorstore = FAISS.from_documents(
-            documents=chunks,
-            embedding=embedding_model,
-        )
+        self.loaded_files[original_name] = chunks
+        self.all_chunks = [c for cs in self.loaded_files.values() for c in cs]
 
-        return len(chunks)  # trả về để Streamlit (Người 3) hiển thị thông báo
+        embedding = get_embedding_model()
 
-    # ------------------------------------------------------------------ #
-    #  BƯỚC 2: Tạo RetrievalQA chain từ vectorstore + Ollama              #
-    # ------------------------------------------------------------------ #
-    def build_chain(self):
-        """
-        Kết nối 3 thành phần thành 1 chain hoàn chỉnh:
-          FAISS retriever  → tìm top-3 chunks liên quan với câu hỏi
-          PromptTemplate   → đóng gói context + câu hỏi thành prompt
-          OllamaLLM        → sinh câu trả lời từ prompt
-        """
         if self.vectorstore is None:
-            raise ValueError("Gọi build_vectorstore() trước!")
+            self.vectorstore = build_vector_store(chunks)
+        else:
+            from langchain_community.vectorstores import FAISS
+            new_vs = FAISS.from_documents(chunks, embedding)
+            self.vectorstore.merge_from(new_vs)
 
-        # --- Retriever: tìm top-3 chunks gần nhất với câu hỏi ---
-        # search_type="similarity": dùng cosine similarity
-        # k=3: lấy 3 chunks liên quan nhất → đủ context, không quá dài
-        retriever = self.vectorstore.as_retriever(
-            search_type="similarity",
-            search_kwargs={"k": 3},
+        save_vector_store(self.vectorstore)
+        self._rebuild_services()
+        return len(chunks)
+
+    def _rebuild_services(self):
+        """Rebuild cả RAG lẫn CoRAG từ cùng 1 vectorstore."""
+        if self.vectorstore is None or not self.all_chunks:
+            self.rag_service   = None
+            self.corag_service = None
+            return
+
+        semantic = SemanticRetriever(vector_store=self.vectorstore, k=4)
+        keyword  = KeywordRetriever(documents=self.all_chunks, k=3)
+        hybrid   = HybridRetriever(semantic, keyword, alpha=0.5, top_k=4)
+
+        # RAG dùng RagService gốc của backend
+        self.rag_service = RagService(
+            llm=self.llm,
+            prompt_builder=self.prompt_builder,
+            retrieve=hybrid,
+            k=4,
         )
 
-        # --- Prompt template ---
-        # {context}: 3 chunks tìm được (LangChain tự điền)
-        # {question}: câu hỏi người dùng (LangChain tự điền)
-        # Hướng dẫn model trả lời ngắn gọn và bám sát tài liệu
-        prompt_template = """Bạn là trợ lý thông minh. Hãy dùng ngữ cảnh dưới đây \
-để trả lời câu hỏi một cách ngắn gọn (3-4 câu).
-Nếu thông tin không có trong ngữ cảnh, hãy nói "Tôi không tìm thấy thông tin này trong tài liệu."
-
-Ngữ cảnh:
-{context}
-
-Câu hỏi: {question}
-
-Trả lời:"""
-
-        prompt = PromptTemplate(
-            input_variables=["context", "question"],
-            template=prompt_template,
-        )
-
-        # --- OllamaLLM: chạy local, không cần internet ---
-        # temperature=0.3: thấp → câu trả lời ổn định, bám sát tài liệu
-        # (tài liệu gốc dùng 0.7 nhưng với RAG nên dùng thấp hơn
-        #  để tránh model "sáng tạo" ngoài ngữ cảnh)
-        llm = OllamaLLM(
-            model="qwen2.5:7b",
-            temperature=0.3,
-        )
-
-        # --- RetrievalQA: chain tích hợp retriever + llm + prompt ---
-        # chain_type="stuff": nhét thẳng 3 chunks vào 1 prompt rồi gửi 1 lần
-        #   → đơn giản nhất, phù hợp cho tuần 1
-        #   → Qwen2.5:7b có context 128K tokens, đủ chứa 3 chunks
-        # return_source_documents=False: tuần 3 đổi thành True để làm citation
-        self.chain = RetrievalQA.from_chain_type(
-            llm=llm,
-            chain_type="stuff",
-            retriever=retriever,
-            return_source_documents=False,
-            chain_type_kwargs={"prompt": prompt},
+        # CoRAG dùng CoRAGService mới — cùng LLM, cùng retriever
+        self.corag_service = CoRAGService(
+            llm=self.llm,
+            prompt_builder=self.prompt_builder,
+            retrieve=hybrid,
+            k=4,
         )
 
     # ------------------------------------------------------------------ #
-    #  BƯỚC 3: Nhận câu hỏi → trả về câu trả lời                         #
+    #  Load từ disk                                                        #
     # ------------------------------------------------------------------ #
-    def ask(self, question: str) -> str:
-        """
-        Gửi câu hỏi vào chain, nhận câu trả lời dạng string.
-        Chain tự động thực hiện:
-          1. Embed câu hỏi thành vector
-          2. Tìm top-3 chunks gần nhất trong FAISS
-          3. Ghép chunks vào prompt template
-          4. Gửi prompt lên Ollama (Qwen2.5:7b)
-          5. Trả về câu trả lời
-        """
-        if self.chain is None:
-            return "Chưa nạp tài liệu. Hãy upload file trước."
-
-        # invoke() trả về dict với key "result" chứa câu trả lời string
-        response = self.chain.invoke({"query": question})
-        return response["result"]
+    def load_from_disk_and_build(self) -> bool:
+        if not INDEX_DIR.exists():
+            return False
+        try:
+            self.vectorstore = load_vector_store()
+            self.all_chunks  = list(self.vectorstore.docstore._dict.values())
+            for chunk in self.all_chunks:
+                src = chunk.metadata.get("source", "unknown")
+                self.loaded_files.setdefault(src, []).append(chunk)
+            self._rebuild_services()
+            return True
+        except Exception as e:
+            print(f"Không thể load index từ disk: {e}")
+            return False
 
     # ------------------------------------------------------------------ #
-    #  Hàm tiện ích: chạy cả pipeline trong 1 lệnh                        #
+    #  Xoá file khỏi index                                                 #
     # ------------------------------------------------------------------ #
-    def load_and_build(self, file_path: str) -> int:
+    def remove_document(self, original_name: str) -> bool:
+        if original_name not in self.loaded_files:
+            return False
+        del self.loaded_files[original_name]
+        self.all_chunks = [c for cs in self.loaded_files.values() for c in cs]
+        if not self.all_chunks:
+            self.vectorstore   = None
+            self.rag_service   = None
+            self.corag_service = None
+            return True
+        self.vectorstore = build_vector_store(self.all_chunks)
+        save_vector_store(self.vectorstore)
+        self._rebuild_services()
+        return True
+
+    # ------------------------------------------------------------------ #
+    #  RAG: retrieve 1 lần → generate                                     #
+    # ------------------------------------------------------------------ #
+    def ask_rag(
+        self,
+        question: str,
+        filter: DocumentFilter | None = None,
+        save_history: bool = True,
+    ) -> dict:
         """
-        Gộp bước 1 + 2 lại để Người 3 (Streamlit) tiện gọi.
-        Người 3 chỉ cần gọi hàm này sau khi user upload file,
-        sau đó gọi ask() để hỏi đáp.
-        Trả về số chunks để hiển thị thông báo trên giao diện.
+        RAG thuần: retrieve top-k chunks → generate.
+        Trả về: { question, answer, sources, meta }
         """
-        num_chunks = self.build_vectorstore(file_path)
-        self.build_chain()
-        return num_chunks
+        if self.rag_service is None:
+            return _not_ready(question)
+
+        result = self.rag_service.answer(question, filter=filter)
+        result["meta"]["method"] = "rag"
+
+        if save_history:
+            _save(result)
+        return result
+
+    # ------------------------------------------------------------------ #
+    #  CoRAG: decompose → multi-retrieve → synthesize                     #
+    # ------------------------------------------------------------------ #
+    def ask_corag(
+        self,
+        question: str,
+        filter: DocumentFilter | None = None,
+        save_history: bool = True,
+    ) -> dict:
+        """
+        CoRAG: phân tách câu hỏi → retrieve nhiều lần → tổng hợp.
+        Trả về: { question, answer, sources, sub_questions, meta }
+        """
+        if self.corag_service is None:
+            return _not_ready(question)
+
+        result = self.corag_service.answer(question, filter=filter)
+
+        if save_history:
+            _save(result)
+        return result
+
+    # ------------------------------------------------------------------ #
+    #  Tiện ích                                                            #
+    # ------------------------------------------------------------------ #
+    def get_loaded_files(self) -> list[str]:
+        return list(self.loaded_files.keys())
+
+    def get_history(self) -> list:
+        return get_all_history()
+
+    def clear_history(self) -> None:
+        clear()
 
 
 # ------------------------------------------------------------------ #
-#  Chạy thử nhanh từ terminal (không cần Streamlit)                   #
+#  Helpers nội bộ                                                      #
+# ------------------------------------------------------------------ #
+def _not_ready(question: str) -> dict:
+    return {
+        "question":      question,
+        "answer":        "Chưa nạp tài liệu. Hãy upload file trước.",
+        "sources":       [],
+        "sub_questions": [],
+        "meta":          {},
+    }
+
+def _save(result: dict):
+    try:
+        add_entry(
+            question=result["question"],
+            ans=result["answer"],
+            sources=result.get("sources", []),
+            meta=result.get("meta", {}),
+        )
+    except Exception as e:
+        print(f"Warning: không lưu được history: {e}")
+
+
+# ------------------------------------------------------------------ #
+#  Chạy thử từ terminal                                                #
 # ------------------------------------------------------------------ #
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("Cách dùng: python app.py <đường_dẫn_file> <câu_hỏi>")
-        print('Ví dụ:     python app.py data/gutenberg.pdf "Tài liệu này nói về gì?"')
+        print("Dùng: python app.py <file> <câu_hỏi>")
         sys.exit(1)
 
-    file_path = sys.argv[1]
-    question  = sys.argv[2]
+    file_path     = sys.argv[1]
+    question      = sys.argv[2]
+    original_name = Path(file_path).name
 
-    print(f"Đang nạp file: {file_path}")
     rag = RAGChain()
-    num = rag.load_and_build(file_path)
-    print(f"Đã index {num} chunks. Đang hỏi...")
+    n   = rag.add_document(file_path, original_name)
+    print(f"Đã index {n} chunks từ '{original_name}'\n")
 
-    answer = rag.ask(question)
-    print(f"\nCâu trả lời:\n{answer}")
+    print("=" * 60)
+    print("RAG")
+    print("=" * 60)
+    r1 = rag.ask_rag(question, save_history=False)
+    print(f"Trả lời: {r1['answer']}")
+    print(f"Latency: {r1['meta'].get('latency')}s")
+
+    print("\n" + "=" * 60)
+    print("CoRAG")
+    print("=" * 60)
+    r2 = rag.ask_corag(question, save_history=False)
+    print(f"Sub-questions: {r2.get('sub_questions', [])}")
+    print(f"Trả lời: {r2['answer']}")
+    print(f"Latency: {r2['meta'].get('latency')}s")

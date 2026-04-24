@@ -1,52 +1,79 @@
 [
   {
     "id": 1,
-    "question": "Hydrid",
-    "answer": "Hybrid retrieval currently uses a source-plus-page key, which can collapse different chunks into one result when multiple chunks come from the same page. This should be standardized to avoid runtime confusion.",
+    "question": "Nội dung tài liệu?",
+    "answer": "Tài liệu này bao gồm các nội dung chính như sau:\n\n1. Khái niệm Usability của giao diện phần mềm và giải thích các thành phần/yêu cầu chính (Effectiveness, Efficiency, Safety, Learnability, Memorability, Satisfaction).\n2. Nguyên tắc Thiết kế 10:\n   - 6 nguyên tắc thiết kế của Donald A. Norman.\n   - 8 Quy tắc Vàng (Golden Rules) của Ben Shneiderman.\n   - 10 Quy tắc Heuristics của Jakob Nielsen.\n3. Kỹ thuật & Công cụ Thiết kế 11: Xác định Yêu cầu, chú trọng đến kịch bản (Scenario).\n4. Phân tích ưu nhược điểm các kiểu tương tác phổ biến trên giao diện web và quyết định sử dụng giao diện ứng dụng hay web cho dịch vụ.\n\n(Tài liệu từ on tap 2026 - Phần 1.pdf)",
     "sources": [
       {
         "index": 1,
-        "source": "RAG_Project_Status_Report_20260411_085719_84da409f.pdf",
-        "page": 0,
-        "content": "clear message asking for document upload first.\n(cid:127) The upload schema was patched so Swagger renders the files field as binary file input\ninstead of plain string input.\n3. Open Issues and Risks\n(cid:127) Import paths are still mixed in some places between backend.* and src.backend.*. This\nshould be standardized to avoid runtime confusion.\n(cid:127) Hybrid retrieval currently uses a source-plus-page key, which can collapse different\nchunks into one result when multiple chunks come from the same page.\n(cid:127) The hybrid score combination should be reviewed because FAISS scores may represent\ndistance, not direct similarity.\n(cid:127) POST /ask can feel slow because each request runs retrieval and then a local Ollama\nmodel inference step.\n(cid:127) requirements.txt still appears to contain unresolved merge markers and should be\ncleaned before broader environment setup.\n4. Recommended Next Steps\n(cid:127) Keep processor.py as the only ingest and splitting layer."
+        "source": "on tap 2026 - Phần 1.pdf",
+        "page": 1,
+        "content": "○ Trình bày khái niệm về Usability của giao diện phần mềm.\n○ Liệt kê và giải thích các thành phần/yêu cầu chính của Usability\n(Effectiveness, Efficiency, Safety, Learnability, Memorability, Satisfaction).\n○ Phân biệt rõ ràng giữa Effectiveness (Hiệu quả) và Efficiency (Hiệu suất).\n○ Cho ví dụ minh họa (tích cực hoặc tiêu cực) cho ít nhất 3 thành phần của\nUsability.\nPhần 4: Nguyên tắc Thiết kế\n10. Các Bộ Nguyên tắc Thiết kế:\n○ Trình bày (bằng tiếng Việt) 6 nguyên tắc thiết kế của Donald A. Norman. Cho\nví dụ minh họa và giải thích cho từng nguyên tắc.\n○ Trình bày (bằng tiếng Việt) 8 Quy tắc Vàng (Golden Rules) của Ben\nShneiderman. Cho ví dụ minh họa và giải thích.\n○ Trình bày (bằng tiếng Việt) 10 Quy tắc Heuristics của Jakob Nielsen. Cho ví dụ\nminh họa và giải thích.\nPhần 5: Kỹ thuật & Công cụ Thiết kế\n11. Xác định Yêu cầu:\n○ Kịch bản (Scenario) là gì? Mục đích và đặc điểm của Scenario trong mô tả\nyêu cầu? Cho ví dụ."
       },
       {
         "index": 2,
-        "source": "RAG_Project_Status_Report_20260411_085719_84da409f.pdf",
-        "page": 1,
-        "content": "performance tuning."
+        "source": "on tap 2026 - Phần 1.pdf",
+        "page": 0,
+        "content": "○ Tăng cường tính dễ học (Learning) cho người dùng mới.\nPhần 3: Tính Tiện lợi (Usability)\n9. Tính Tiện lợi (Usability):"
+      },
+      {
+        "index": 3,
+        "source": "on tap 2026 - Phần 1.pdf",
+        "page": 2,
+        "content": "21. Phân tích ưu nhược điểm của các kiểu tương tác phổ biến trên giao diện web\n(ví dụ: menu điều hướng, form, tìm kiếm...).\n22. Trong trường hợp nào nên ưu tiên thiết kế giao diện ứng dụng (Application UI)\nthay vì giao diện web (Web UI) cho một dịch vụ?"
       }
     ],
     "meta": {
-      "k": 2,
-      "latency": 15.67,
-      "model": "qwen2.5:1.5b"
+      "k": 3,
+      "latency": 109.59,
+      "model": "qwen2.5:7b",
+      "method": "rag"
     },
-    "timestamp": "2026-04-11T14:22:30.588910"
+    "timestamp": "2026-04-22T05:21:23.510979"
   },
   {
     "id": 2,
-    "question": "Hydrid",
-    "answer": "Hybrid retrieval currently uses a source-plus-page key, which can collapse different chunks into one result when multiple chunks come from the same page.",
+    "question": "Nội dung tài liệu?",
+    "answer": "Nội dung tài liệu bao gồm các phần chính như sau:\n\n1. Yếu tố con người trong thiết kế giao diện, mô hình xử lý thông tin của con người và nhận thức trong HCI.\n2. Ứng dụng hiểu biết về nhận thức vào thiết kế.\n3. Usability của giao diện phần mềm, nguyên tắc thiết kế và các quy tắc vàng.\n4. Phân tích ưu nhược điểm của các kiểu tương tác phổ biến trên giao diện web và quyết định sử dụng giao diện ứng dụng hay web.\n5. Kịch bản (Scenario), ca sử dụng (Use Case) và tạo mẫu (Prototyping).\n6. Thiết kế input/output và reports, điều khiển (controls/widgets) và thiết kế màn hình.\n\nNội dung tập trung vào các khía cạnh quan trọng của thiết kế giao diện người dùng và usability, bao gồm lý thuyết, nguyên tắc thiết kế và kỹ thuật thực hiện.",
     "sources": [
       {
         "index": 1,
-        "source": "RAG_Project_Status_Report_20260411_085719_84da409f.pdf",
+        "source": "on tap 2026 - Phần 1.pdf",
         "page": 0,
-        "content": "clear message asking for document upload first.\n(cid:127) The upload schema was patched so Swagger renders the files field as binary file input\ninstead of plain string input.\n3. Open Issues and Risks\n(cid:127) Import paths are still mixed in some places between backend.* and src.backend.*. This\nshould be standardized to avoid runtime confusion.\n(cid:127) Hybrid retrieval currently uses a source-plus-page key, which can collapse different\nchunks into one result when multiple chunks come from the same page.\n(cid:127) The hybrid score combination should be reviewed because FAISS scores may represent\ndistance, not direct similarity.\n(cid:127) POST /ask can feel slow because each request runs retrieval and then a local Ollama\nmodel inference step.\n(cid:127) requirements.txt still appears to contain unresolved merge markers and should be\ncleaned before broader environment setup.\n4. Recommended Next Steps\n(cid:127) Keep processor.py as the only ingest and splitting layer."
+        "content": "5. Yếu tố Con người trong Thiết kế Giao diện: Tại sao việc hiểu rõ người dùng (khả\nnăng, thói quen, lỗi thường gặp, sự đa dạng) lại quan trọng?\n6. Mô hình Xử lý Thông tin của Con người: Trình bày các thành phần cơ bản\n(Input, Output, Memory, Processor) trong mô hình xử lý thông tin của con người\ntheo góc độ HCI.\n7. Nhận thức (Cognition) trong HCI:\n○ Tại sao cần tìm hiểu về quá trình nhận thức của con người khi thiết kế giao\ndiện?\n○ Trình bày các yếu tố/quá trình nhận thức cốt lõi (Attention, Perception,\nMemory, Learning) và vai trò của chúng khi người dùng tương tác với hệ\nthống.\n○ Phân biệt giữa Recognition (Nhận biết) và Recall (Nhớ lại). Nguyên tắc thiết kế\nnào liên quan đến yếu tố này và tại sao nó quan trọng?\n8. Ứng dụng Hiểu biết về Nhận thức vào Thiết kế: Trình bày các kỹ thuật thiết kế\ncụ thể nhằm:\n○ Thu hút sự chú ý (Attention) của người dùng một cách hiệu quả.\n○ Hỗ trợ khả năng ghi nhớ (Memory) thông tin và thao tác.\n○ Tăng cường tính dễ học (Learning) cho người dùng mới."
       },
       {
         "index": 2,
-        "source": "RAG_Project_Status_Report_20260411_085719_84da409f.pdf",
+        "source": "on tap 2026 - Phần 1.pdf",
         "page": 1,
-        "content": "performance tuning."
+        "content": "○ Trình bày khái niệm về Usability của giao diện phần mềm.\n○ Liệt kê và giải thích các thành phần/yêu cầu chính của Usability\n(Effectiveness, Efficiency, Safety, Learnability, Memorability, Satisfaction).\n○ Phân biệt rõ ràng giữa Effectiveness (Hiệu quả) và Efficiency (Hiệu suất).\n○ Cho ví dụ minh họa (tích cực hoặc tiêu cực) cho ít nhất 3 thành phần của\nUsability.\nPhần 4: Nguyên tắc Thiết kế\n10. Các Bộ Nguyên tắc Thiết kế:\n○ Trình bày (bằng tiếng Việt) 6 nguyên tắc thiết kế của Donald A. Norman. Cho\nví dụ minh họa và giải thích cho từng nguyên tắc.\n○ Trình bày (bằng tiếng Việt) 8 Quy tắc Vàng (Golden Rules) của Ben\nShneiderman. Cho ví dụ minh họa và giải thích.\n○ Trình bày (bằng tiếng Việt) 10 Quy tắc Heuristics của Jakob Nielsen. Cho ví dụ\nminh họa và giải thích.\nPhần 5: Kỹ thuật & Công cụ Thiết kế\n11. Xác định Yêu cầu:\n○ Kịch bản (Scenario) là gì? Mục đích và đặc điểm của Scenario trong mô tả\nyêu cầu? Cho ví dụ."
+      },
+      {
+        "index": 3,
+        "source": "on tap 2026 - Phần 1.pdf",
+        "page": 2,
+        "content": "21. Phân tích ưu nhược điểm của các kiểu tương tác phổ biến trên giao diện web\n(ví dụ: menu điều hướng, form, tìm kiếm...).\n22. Trong trường hợp nào nên ưu tiên thiết kế giao diện ứng dụng (Application UI)\nthay vì giao diện web (Web UI) cho một dịch vụ?"
+      },
+      {
+        "index": 4,
+        "source": "on tap 2026 - Phần 1.pdf",
+        "page": 1,
+        "content": "○ Kịch bản (Scenario) là gì? Mục đích và đặc điểm của Scenario trong mô tả\nyêu cầu? Cho ví dụ.\n○ Ca sử dụng (Use Case) là gì? Các thành phần chính của Use Case Diagram?\nMục đích của việc viết Use Case Steps? Cho ví dụ (bao gồm cả diagram và\nsteps nếu có thể).\n12. Tạo mẫu (Prototyping):\n○ Prototype là gì? Tại sao cần tạo prototype trong quá trình thiết kế? So sánh\nPrototyping Low-fidelity và High-fidelity: Đặc điểm, ưu điểm, nhược điểm và\nví dụ cho mỗi loại.\n13. Thiết kế Input/Output & Reports: Nêu các nguyên tắc cần tuân thủ khi thiết kế\nform nhập liệu và khi thiết kế báo cáo (report).\n14. Điều khiển (Controls/Widgets):\n○ Liệt kê các nhóm controls cơ bản (ví dụ: container, nhập liệu, lệnh, hiển thị dữ\nliệu...). Nêu chức năng chính và ví dụ cụ thể cho mỗi nhóm.\n15. Thiết kế Màn hình: Trình bày các yếu tố cần cân nhắc khi sắp xếp bố cục và thiết\nkế một màn hình giao diện (ví dụ: menu, vùng nhập liệu, vùng hiển thị...). Nguyên\ntắc \"đúng trước, tiện lợi sau\" nghĩa là gì?"
+      },
+      {
+        "index": 5,
+        "source": "on tap 2026 - Phần 1.pdf",
+        "page": 0,
+        "content": "○ Tăng cường tính dễ học (Learning) cho người dùng mới.\nPhần 3: Tính Tiện lợi (Usability)\n9. Tính Tiện lợi (Usability):"
       }
     ],
     "meta": {
-      "k": 2,
-      "latency": 31.19,
-      "model": "qwen2.5:1.5b"
+      "latency": 184.52,
+      "model": "qwen2.5:7b",
+      "method": "corag",
+      "num_sub": 2,
+      "num_docs": 5
     },
-    "timestamp": "2026-04-11T14:32:56.911600"
+    "timestamp": "2026-04-22T05:24:28.049374"
   }
 ]
