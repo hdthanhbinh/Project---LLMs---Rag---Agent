@@ -6,9 +6,6 @@ print("CUDA available:", torch.cuda.is_available())
 if torch.cuda.is_available():
     print("GPU Name:", torch.cuda.get_device_name(0))
 class RagService:
-    MAX_CONTEXT_CHARS_PER_DOC = 1200
-    MAX_CONTEXT_CHARS_TOTAL = 3500
-
     def __init__(self, llm, prompt_builder, retrieve, k: int = 3):
         self.k = k
         self.llm = llm

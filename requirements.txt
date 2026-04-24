@@ -1,17 +1,18 @@
-streamlit
-pdfplumber
-python-docx
+streamlit==1.56.0
+ollama
 langchain
 langchain-community
-langchain-huggingface
 langchain-ollama
+langchain-huggingface
 langchain-classic
 langchain-core
 langchain-text-splitters
-faiss-cpu
 sentence-transformers
-ollama
-torch --index-url https://download.pytorch.org/whl/cpu
+faiss-cpu
+pypdf
+pdfplumber
+python-docx
+torch
 torchvision --index-url https://download.pytorch.org/whl/cpu
 python-multipart
 fastapi
