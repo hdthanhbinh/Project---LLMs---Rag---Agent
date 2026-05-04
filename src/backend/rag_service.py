@@ -11,6 +11,9 @@ class RagService:
         self.llm = llm
         self.prompt_builder = prompt_builder
         self.retrieve = retrieve
+        # Default context limits used by format_context.
+        self.MAX_CONTEXT_CHARS_PER_DOC = 2000
+        self.MAX_CONTEXT_CHARS_TOTAL = 6000
 
     def normalize_question(self, question: Any) -> str:
         if question is None:
@@ -151,8 +154,23 @@ class RagService:
             return self.build_response(question=question, answer=msg,
                                     docs=[], latency=time.time() - start)
 
-        response, docs_used = self.invoke_with_fallback(question, docs)
-        answer_text = getattr(response, "content", str(response)).strip()
+        try:
+            response, docs_used = self.invoke_with_fallback(question, docs)
+            answer_text = getattr(response, "content", str(response)).strip()
+        except Exception as exc:
+            err_text = str(exc).lower()
+            if "winerror 10061" in err_text or "connection refused" in err_text:
+                answer_text = (
+                    "Không thể kết nối tới Ollama. "
+                    "Hãy mở terminal và chạy `ollama serve`, sau đó thử lại."
+                )
+                return self.build_response(
+                    question=question,
+                    answer=answer_text,
+                    docs=[],
+                    latency=time.time() - start,
+                )
+            raise
 
         return self.build_response(question=question, answer=answer_text,
                                 docs=docs_used, latency=time.time() - start)
