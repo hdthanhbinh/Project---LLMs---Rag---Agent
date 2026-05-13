@@ -17,9 +17,15 @@ from src.backend.vector_store import (
     save_vector_store,
     load_vector_store,
     INDEX_DIR,
+    delete_vector_store,
+    index_exists,
 )
 from src.backend.history_store import add_entry, get_all_history, clear
 from src.processor import load_document, split_text, get_embedding_model
+
+
+ROOT_DIR = Path(__file__).resolve().parent
+DATA_UPLOADS_DIR = ROOT_DIR / "data" / "uploads"
 
 
 @dataclass
@@ -53,12 +59,20 @@ class RAGChain:
     # ------------------------------------------------------------------ #
     #  Thêm file vào index (merge)                                         #
     # ------------------------------------------------------------------ #
-    def add_document(self, file_path: str, original_name: str) -> int:
+    def add_document(
+        self,
+        file_path: str,
+        original_name: str,
+        chunk_size: int = 1000,
+        chunk_overlap: int = 100,
+    ) -> int:
         docs   = load_document(file_path)
-        chunks = split_text(docs)
+        chunks = split_text(docs, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
 
         for chunk in chunks:
             chunk.metadata["source"] = original_name
+            chunk.metadata["chunk_size"] = chunk_size
+            chunk.metadata["chunk_overlap"] = chunk_overlap
 
         self.loaded_files[original_name] = chunks
         self.all_chunks = [c for cs in self.loaded_files.values() for c in cs]
@@ -107,7 +121,7 @@ class RAGChain:
     #  Load từ disk                                                        #
     # ------------------------------------------------------------------ #
     def load_from_disk_and_build(self) -> bool:
-        if not INDEX_DIR.exists():
+        if not index_exists(INDEX_DIR):
             return False
         try:
             self.vectorstore = load_vector_store()
@@ -133,6 +147,7 @@ class RAGChain:
             self.vectorstore   = None
             self.rag_service   = None
             self.corag_service = None
+            delete_vector_store()
             return True
         self.vectorstore = build_vector_store(self.all_chunks)
         save_vector_store(self.vectorstore)
@@ -195,6 +210,21 @@ class RAGChain:
 
     def clear_history(self) -> None:
         clear()
+
+    def clear_index(self, delete_uploaded_files: bool = False) -> None:
+        """Clear in-memory and persisted vector index."""
+        self.vectorstore = None
+        self.all_chunks = []
+        self.loaded_files = {}
+        self.rag_service = None
+        self.corag_service = None
+        delete_vector_store()
+
+        if delete_uploaded_files:
+            DATA_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+            for path in DATA_UPLOADS_DIR.rglob("*"):
+                if path.is_file():
+                    path.unlink()
 
 
 # ------------------------------------------------------------------ #

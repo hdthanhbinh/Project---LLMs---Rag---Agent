@@ -75,5 +75,82 @@
       "num_docs": 5
     },
     "timestamp": "2026-04-22T05:24:28.049374"
+  },
+  {
+    "id": 3,
+    "question": "2 tài liệu vừa được upload nói về gì",
+    "answer": "Tài liệu 1 đề cập đến chính sách đổi laptop, quy định an ninh mạng, và chi phí bồi hoàn cho chuyến đi của nhân viên. Tài liệu 2 nói về giờ làm việc, chính sách nghỉ phép, và hướng dẫn đặt lại mật khẩu. Tôi không tìm thấy thông tin phù hợp về nội dung cụ thể của hai tài liệu còn lại trong đoạn văn bản cung cấp.",
+    "sources": [
+      {
+        "index": 1,
+        "source": "Employee Handbook 2026.pdf",
+        "page": 1,
+        "content": "Nhân viên được đổi laptop nếu:\n• Thiết bị trên 4 năm tuổi\n• Pin chai dưới 60%\n• Hư hỏng phần cứng nghiêm trọng\n4. Security Policy\n• Không được chia sẻ tài khoản nội bộ.\n• Bắt buộc bật MFA cho tất cả tài khoản.\n• Không upload source code công ty lên dịch vụ public.\n5. Travel Reimbursement\nHotel\n• Tối đa:\no Việt Nam: 2,500,000 VND/đêm\no Singapore: 180 SGD/đêm\no Nhật Bản: 22,000 JPY/đêm\nMeals\n• Breakfast: 15 USD\n• Lunch: 25 USD\n• Dinner: 40 USD"
+      },
+      {
+        "index": 2,
+        "source": "Employee Handbook 2026.pdf",
+        "page": 0,
+        "content": "Employee Handbook 2026\n1. Working Hours\nNhân viên làm việc từ thứ Hai đến thứ Sáu.\n• Giờ làm việc chuẩn: 9:00 AM – 6:00 PM\n• Nghỉ trưa: 12:00 PM – 1:00 PM\n• Nhân viên có thể làm hybrid tối đa 3 ngày/tuần.\n• Các team Infrastructure và Security phải có mặt tại văn phòng ít nhất 4 ngày/tuần.\n2. Leave Policy\nAnnual Leave\n• Nhân viên dưới 2 năm kinh nghiệm: 12 ngày phép/năm.\n• Nhân viên từ 2–5 năm: 15 ngày phép/năm.\n• Nhân viên trên 5 năm: 18 ngày phép/năm.\nSick Leave\n• Tối đa 10 ngày/năm.\n• Nếu nghỉ quá 3 ngày liên tiếp cần giấy xác nhận của bác sĩ.\n3. IT Support\nPassword Reset\nĐể reset mật khẩu:\n1. Truy cập portal nội bộ.\n2. Chọn “Forgot Password”.\n3. OTP sẽ gửi qua email công ty.\n4. Mật khẩu mới phải:\no ít nhất 12 ký tự\no có chữ hoa\no có số\no có ký tự đặc biệt\nLaptop Replacement"
+      },
+      {
+        "index": 3,
+        "source": "Production Incident Report.pdf",
+        "page": 2,
+        "content": "Nếu fragmentation ratio > 1.5:\n1. Kiểm tra memory pressure\n2. Chạy Redis INFO MEMORY\n3. Restart replica trước\n4. Enable active-defrag: CONFIG SET activedefrag yes\nKubernetes Scaling\nScale deployment: kubectl scale deployment recommendation-api --replicas=20"
+      },
+      {
+        "index": 4,
+        "source": "Production Incident Report.pdf",
+        "page": 1,
+        "content": "Điều này dẫn đến:\n1. Cache miss tăng\n2. Database query tăng đột biến\n3. CPU service tăng cao\n4. Request timeout\nMitigation\n• Restart Redis nodes\n• Enable active defragmentation\n• Tăng memory reservation thêm 20%\nPermanent Fix\nPlanned actions:\n• Upgrade Redis 6.2 → 7.2\n• Add autoscaling cho feature-store\n• Implement adaptive caching strategy\nSlack Conversation\nChannel: #incident-war-room\nAlice (SRE)\n“Redis memory usage looks abnormal. Fragmentation ratio is 2.7”\nBob (Backend Engineer)\n“I suspect recommendation-api is retrying too aggressively.”\nCharlie (Platform)\n“feature-store pods are throttling CPU.”\nAlice\n“After Redis restart, hit rate recovered to 89%.”\nInternal Runbook\nRedis Troubleshooting"
+      }
+    ],
+    "meta": {
+      "k": 4,
+      "latency": 166.76,
+      "model": "qwen2.5:7b",
+      "method": "rag"
+    },
+    "timestamp": "2026-05-14T01:26:42.820371"
+  },
+  {
+    "id": 4,
+    "question": "2 tài liệu vừa được upload nói về gì",
+    "answer": "Tài liệu đầu tiên là Hánh chính viên chức năm 2026, đề cập đến giờ làm việc, chính sách nghỉ phép và hỗ trợ công nghệ. Tài liệu thứ hai là Báo cáo sự cố sản xuất, mô tả một sự cố liên quan đến Redis gây ra tăng latency và các biện pháp khắc phục.",
+    "sources": [
+      {
+        "index": 1,
+        "source": "Employee Handbook 2026.pdf",
+        "page": 0,
+        "content": "Employee Handbook 2026\n1. Working Hours\nNhân viên làm việc từ thứ Hai đến thứ Sáu.\n• Giờ làm việc chuẩn: 9:00 AM – 6:00 PM\n• Nghỉ trưa: 12:00 PM – 1:00 PM\n• Nhân viên có thể làm hybrid tối đa 3 ngày/tuần.\n• Các team Infrastructure và Security phải có mặt tại văn phòng ít nhất 4 ngày/tuần.\n2. Leave Policy\nAnnual Leave\n• Nhân viên dưới 2 năm kinh nghiệm: 12 ngày phép/năm.\n• Nhân viên từ 2–5 năm: 15 ngày phép/năm.\n• Nhân viên trên 5 năm: 18 ngày phép/năm.\nSick Leave\n• Tối đa 10 ngày/năm.\n• Nếu nghỉ quá 3 ngày liên tiếp cần giấy xác nhận của bác sĩ.\n3. IT Support\nPassword Reset\nĐể reset mật khẩu:\n1. Truy cập portal nội bộ.\n2. Chọn “Forgot Password”.\n3. OTP sẽ gửi qua email công ty.\n4. Mật khẩu mới phải:\no ít nhất 12 ký tự\no có chữ hoa\no có số\no có ký tự đặc biệt\nLaptop Replacement"
+      },
+      {
+        "index": 2,
+        "source": "Production Incident Report.pdf",
+        "page": 1,
+        "content": "Điều này dẫn đến:\n1. Cache miss tăng\n2. Database query tăng đột biến\n3. CPU service tăng cao\n4. Request timeout\nMitigation\n• Restart Redis nodes\n• Enable active defragmentation\n• Tăng memory reservation thêm 20%\nPermanent Fix\nPlanned actions:\n• Upgrade Redis 6.2 → 7.2\n• Add autoscaling cho feature-store\n• Implement adaptive caching strategy\nSlack Conversation\nChannel: #incident-war-room\nAlice (SRE)\n“Redis memory usage looks abnormal. Fragmentation ratio is 2.7”\nBob (Backend Engineer)\n“I suspect recommendation-api is retrying too aggressively.”\nCharlie (Platform)\n“feature-store pods are throttling CPU.”\nAlice\n“After Redis restart, hit rate recovered to 89%.”\nInternal Runbook\nRedis Troubleshooting"
+      },
+      {
+        "index": 3,
+        "source": "Employee Handbook 2026.pdf",
+        "page": 1,
+        "content": "Nhân viên được đổi laptop nếu:\n• Thiết bị trên 4 năm tuổi\n• Pin chai dưới 60%\n• Hư hỏng phần cứng nghiêm trọng\n4. Security Policy\n• Không được chia sẻ tài khoản nội bộ.\n• Bắt buộc bật MFA cho tất cả tài khoản.\n• Không upload source code công ty lên dịch vụ public.\n5. Travel Reimbursement\nHotel\n• Tối đa:\no Việt Nam: 2,500,000 VND/đêm\no Singapore: 180 SGD/đêm\no Nhật Bản: 22,000 JPY/đêm\nMeals\n• Breakfast: 15 USD\n• Lunch: 25 USD\n• Dinner: 40 USD"
+      },
+      {
+        "index": 4,
+        "source": "Production Incident Report.pdf",
+        "page": 0,
+        "content": "Production Incident Report\nIncident Summary\nNgày 12/03/2026 lúc 02:13 UTC, hệ thống recommendation service bị tăng latency đột\nbiến.\nSymptoms\n• API response time tăng từ 120ms lên 4.8s\n• CPU usage tăng lên 95%\n• Redis hit rate giảm từ 92% xuống 41%\n• Khoảng 18% request timeout\nAffected Services\n• recommendation-api\n• user-profile-service\n• feature-store\nTimeline\nTime Event\n02:13 Alert từ Grafana\n02:15 On-call engineer xác nhận incident\n02:20 Scale Kubernetes pods từ 8 → 20\n02:28 Redis cluster phát hiện memory fragmentation\n02:35 Restart Redis nodes\n02:42 Latency giảm còn 300ms\n02:55 Incident resolved\nRoot Cause\nNguyên nhân chính là memory fragmentation trong Redis 6.2 khiến cache efficiency giảm\nmạnh."
+      }
+    ],
+    "meta": {
+      "latency": 178.41,
+      "model": "qwen2.5:7b",
+      "method": "corag",
+      "num_sub": 2,
+      "num_docs": 4
+    },
+    "timestamp": "2026-05-14T01:29:41.249334"
   }
 ]

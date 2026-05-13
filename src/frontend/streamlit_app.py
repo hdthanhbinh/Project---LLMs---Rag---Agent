@@ -14,6 +14,12 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
 from app import RAGChain, DocumentFilter
+from src.evaluate_chunk_strategy import (
+    CHUNK_OVERLAPS,
+    CHUNK_SIZES,
+    build_report,
+    summarize_chunks,
+)
 
 
 # ------------------------------------------------------------------ #
@@ -45,6 +51,27 @@ st.markdown("""
 }
 [data-testid="stSidebar"] .stButton button:hover {
     background-color: #555C63 !important; border-color: #888 !important;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] details summary {
+    background-color: #3A3840 !important;
+    color: #FFFFFF !important;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] details summary:hover,
+[data-testid="stSidebar"] [data-testid="stExpander"] details summary:focus,
+[data-testid="stSidebar"] [data-testid="stExpander"] details summary:active {
+    background-color: #555C63 !important;
+    color: #FFFFFF !important;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] details summary *,
+[data-testid="stSidebar"] [data-testid="stExpander"] details summary:hover *,
+[data-testid="stSidebar"] [data-testid="stExpander"] details summary:focus *,
+[data-testid="stSidebar"] [data-testid="stExpander"] details summary:active * {
+    color: #FFFFFF !important;
+    fill: #FFFFFF !important;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] details {
+    background-color: #2E2C33 !important;
+    color: #FFFFFF !important;
 }
 
 /* Khung RAG */
@@ -112,6 +139,79 @@ st.markdown("""
 }
 .main-header { color:#007BFF; font-size:2em; font-weight:700; margin-bottom:0; }
 .sub-header  { color:#6C757D; font-size:1em; margin-top:0; margin-bottom:16px; }
+.chunk-summary {
+    background: #213F34;
+    border-left: 3px solid #28A745;
+    border-radius: 6px;
+    color: #FFFFFF;
+    font-size: 0.82rem;
+    margin-top: 8px;
+    padding: 8px 10px;
+}
+[data-testid="stSidebar"] [data-testid="stFileUploader"] section {
+    min-height: 72px !important;
+    padding: 8px !important;
+}
+[data-testid="stSidebar"] [data-testid="stFileUploader"] section > div {
+    padding: 4px !important;
+}
+[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] {
+    min-height: 72px !important;
+    padding: 8px !important;
+}
+[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] > div {
+    padding: 0 !important;
+}
+[data-testid="stSidebar"] [data-testid="stFileUploaderFile"] {
+    padding: 6px 8px !important;
+    margin: 0 !important;
+}
+[data-testid="stSidebar"] [data-testid="stFileUploader"] small {
+    font-size: 0.72rem !important;
+}
+[data-testid="stSidebar"] [data-testid="stDownloadButton"] button {
+    background-color: #444950 !important;
+    color: #FFFFFF !important;
+    border: 1px solid #666 !important;
+}
+[data-testid="stSidebar"] [data-testid="stDownloadButton"] button:hover {
+    background-color: #555C63 !important;
+    color: #FFFFFF !important;
+}
+[data-testid="stSidebar"] [data-testid="stDownloadButton"] button *,
+[data-testid="stSidebar"] [data-testid="stDownloadButton"] button:hover * {
+    color: #FFFFFF !important;
+}
+[data-testid="stSidebar"] [data-testid="stDataFrame"] {
+    border: 1px solid #555C63;
+    border-radius: 8px;
+    overflow: hidden;
+}
+[data-testid="stSidebar"] [data-testid="stDataFrame"] div[role="toolbar"] {
+    background: #2E2C33 !important;
+    border-radius: 8px !important;
+    opacity: 1 !important;
+}
+[data-testid="stSidebar"] [data-testid="stDataFrame"] div[role="toolbar"] button {
+    background: #444950 !important;
+    color: #FFFFFF !important;
+    border: 1px solid #666 !important;
+}
+[data-testid="stSidebar"] [data-testid="stDataFrame"] div[role="toolbar"] button * {
+    color: #FFFFFF !important;
+    fill: #FFFFFF !important;
+}
+[data-testid="stSidebar"] [data-testid="stDataFrame"] [data-testid="StyledFullScreenButton"],
+[data-testid="stSidebar"] [data-testid="stDataFrame"] [data-testid="StyledFullScreenButton"] button {
+    background: #444950 !important;
+    color: #FFFFFF !important;
+    border: 1px solid #666 !important;
+    opacity: 1 !important;
+}
+[data-testid="stSidebar"] [data-testid="stDataFrame"] svg {
+    color: #FFFFFF !important;
+    fill: #FFFFFF !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -129,12 +229,113 @@ def init_session():
         "index_ready":    False,
         "filter_source":  None,
         "filter_enabled": False,
+        "upload_widget_key": 0,
+        "chunk_size": 1000,
+        "chunk_overlap": 100,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
 init_session()
+
+
+def run_chunk_strategy_evaluation(uploaded_eval_files) -> tuple[list[dict], str]:
+    temp_paths = []
+    display_names = []
+
+    try:
+        for uf in uploaded_eval_files:
+            suffix = Path(uf.name).suffix
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp.write(uf.getbuffer())
+                temp_paths.append(tmp.name)
+                display_names.append(uf.name)
+
+        rows = []
+        for chunk_size in CHUNK_SIZES:
+            for chunk_overlap in CHUNK_OVERLAPS:
+                if chunk_overlap < chunk_size:
+                    rows.append(
+                        summarize_chunks(temp_paths, chunk_size, chunk_overlap)
+                    )
+
+        report = build_report(rows, display_names)
+        return rows, report
+    finally:
+        for path in temp_paths:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+
+def render_chunk_eval_table(rows: list[dict]) -> str:
+    best = min(rows, key=lambda row: row.get("seconds", 0)) if rows else None
+    body = []
+    for row in rows:
+        marker = "Nhanh nhất" if row is best else ""
+        body.append(
+            "<tr>"
+            f"<td>{marker}</td>"
+            f"<td>{row['chunk_size']}</td>"
+            f"<td>{row['chunk_overlap']}</td>"
+            f"<td>{row['chunk_count']}</td>"
+            f"<td>{row['avg_chars']}</td>"
+            f"<td>{row['seconds']}</td>"
+            "</tr>"
+        )
+
+    return (
+        '<div class="chunk-table-wrap">'
+        '<table class="chunk-table">'
+        "<thead><tr>"
+        "<th>Ghi chú</th>"
+        "<th>Size</th>"
+        "<th>Overlap</th>"
+        "<th>Chunks</th>"
+        "<th>TB ký tự</th>"
+        "<th>Giây</th>"
+        "</tr></thead>"
+        f"<tbody>{''.join(body)}</tbody>"
+        "</table></div>"
+    )
+
+
+@st.dialog("Xác nhận xoá toàn bộ lịch sử")
+def confirm_clear_history_dialog():
+    st.write("Bạn có chắc muốn xoá toàn bộ lịch sử hỏi đáp không?")
+    st.caption("Thao tác này sẽ xoá dữ liệu trong lịch sử chat đã lưu.")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Xác nhận xoá", use_container_width=True):
+            st.session_state.chat_history = []
+            st.session_state.rag.clear_history()
+            st.rerun()
+    with c2:
+        if st.button("Huỷ", use_container_width=True):
+            st.rerun()
+
+
+@st.dialog("Xác nhận xoá tài liệu đã upload")
+def confirm_clear_documents_dialog():
+    st.write("Bạn có chắc muốn xoá toàn bộ tài liệu đã upload không?")
+    st.caption(
+        "Thao tác này sẽ xoá vector store trên disk và các file trong data/uploads nếu có."
+    )
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Xác nhận xoá", use_container_width=True):
+            st.session_state.rag.clear_index(delete_uploaded_files=True)
+            st.session_state.rag = RAGChain()
+            st.session_state.index_ready = False
+            st.session_state.filter_source = None
+            st.session_state.filter_enabled = False
+            st.session_state.upload_widget_key += 1
+            st.rerun()
+    with c2:
+        if st.button("Huỷ", use_container_width=True):
+            st.rerun()
 
 
 # ------------------------------------------------------------------ #
@@ -153,9 +354,77 @@ with st.sidebar:
     st.markdown("---")
 
     st.markdown("### Cấu hình")
-    st.markdown("**Model:** `qwen2.5:1.5b`")
+    st.markdown("**Model:** `qwen2.5:1.7b`")
     st.markdown("**Embedding:** `MPNet 768-dim`")
     st.markdown("**Retriever:** Hybrid (FAISS + BM25)")
+
+    st.session_state.chunk_size = st.selectbox(
+        "Chunk size:",
+        options=[500, 1000, 1500, 2000],
+        index=[500, 1000, 1500, 2000].index(st.session_state.chunk_size),
+        help="Số ký tự tối đa trong mỗi chunk khi upload tài liệu.",
+    )
+    valid_overlaps = [
+        overlap for overlap in [50, 100, 200]
+        if overlap < st.session_state.chunk_size
+    ]
+    if st.session_state.chunk_overlap not in valid_overlaps:
+        st.session_state.chunk_overlap = valid_overlaps[0]
+    st.session_state.chunk_overlap = st.selectbox(
+        "Chunk overlap:",
+        options=valid_overlaps,
+        index=valid_overlaps.index(st.session_state.chunk_overlap),
+        help="Số ký tự lặp lại giữa hai chunk liền kề.",
+    )
+
+    st.markdown("### Đánh giá Chunk Strategy")
+    eval_files = st.file_uploader(
+        "Chọn file PDF/DOCX để so sánh chunk",
+        type=["pdf", "docx"],
+        accept_multiple_files=True,
+        key="chunk_strategy_eval_files",
+        help="Phần này chỉ tạo bảng so sánh, không upload vào index chính.",
+    )
+    if st.button(
+        "Chạy đánh giá chunk",
+        use_container_width=True,
+        disabled=not eval_files,
+    ):
+        with st.spinner("Đang đánh giá các cấu hình chunk..."):
+            try:
+                rows, report = run_chunk_strategy_evaluation(eval_files)
+                st.session_state.chunk_eval_rows = rows
+                st.session_state.chunk_eval_report = report
+            except Exception as exc:
+                st.error(f"Không thể đánh giá chunk: {exc}")
+
+    if st.session_state.get("chunk_eval_rows"):
+        rows = st.session_state.chunk_eval_rows
+        fastest = min(rows, key=lambda row: row.get("seconds", 0))
+        fewest_chunks = min(rows, key=lambda row: row.get("chunk_count", 0))
+        st.markdown(
+            '<div class="chunk-summary">'
+            f"Nhanh nhất: size {fastest['chunk_size']}, "
+            f"overlap {fastest['chunk_overlap']} ({fastest['seconds']}s)<br>"
+            f"Ít chunks nhất: size {fewest_chunks['chunk_size']}, "
+            f"overlap {fewest_chunks['chunk_overlap']} "
+            f"({fewest_chunks['chunk_count']} chunks)"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        st.dataframe(
+            rows,
+            hide_index=True,
+            use_container_width=True,
+            height=300,
+        )
+        st.download_button(
+            "Tải báo cáo Markdown",
+            data=st.session_state.chunk_eval_report,
+            file_name="chunk_strategy_report.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
 
     loaded = st.session_state.rag.get_loaded_files()
     if loaded:
@@ -190,21 +459,10 @@ with st.sidebar:
 
     # Xoá
     st.markdown("### Xoá dữ liệu")
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("Xoá chat", use_container_width=True):
-            st.session_state.chat_history = []
-            st.session_state.rag.clear_history()
-            st.rerun()
-    with c2:
-        if st.button("Reset index", use_container_width=True):
-            st.session_state.rag.clear_history()
-            st.session_state.rag          = RAGChain()
-            st.session_state.index_ready  = False
-            st.session_state.chat_history = []
-            st.session_state.filter_source  = None
-            st.session_state.filter_enabled = False
-            st.rerun()
+    if st.button("Xoá Toàn Bộ Lịch Sử", use_container_width=True):
+        confirm_clear_history_dialog()
+    if st.button("Xoá Tài Liệu Đã Upload", use_container_width=True):
+        confirm_clear_documents_dialog()
 
     st.markdown("---")
 
@@ -219,6 +477,8 @@ with st.sidebar:
         for entry in reversed(hist[-8:]):
             q   = entry.get("question", "")
             qp  = q[:55] + ("..." if len(q) > 55 else "")
+            answer = entry.get("answer", "")
+            answer_preview = answer[:90] + ("..." if len(answer) > 90 else "")
             ts  = entry.get("timestamp", "")[:16].replace("T", " ")
             lat = entry.get("meta", {}).get("latency", "")
             lats = f" · {lat}s" if lat else ""
@@ -227,9 +487,22 @@ with st.sidebar:
                     else f'<span class="badge-rag">RAG</span>'
             st.markdown(
                 f'<div class="history-box">{badge} {qp}<br>'
+                f'<span style="font-size:0.78em;color:#DDD;">{answer_preview}</span><br>'
                 f'<span style="font-size:0.78em;color:#AAA;">{ts}{lats}</span></div>',
                 unsafe_allow_html=True,
             )
+            with st.expander("Xem câu hỏi và câu trả lời", expanded=False):
+                st.markdown("**Câu hỏi**")
+                st.write(q)
+                st.markdown("**Câu trả lời**")
+                st.write(answer or "_Chưa có câu trả lời được lưu._")
+
+                sources = entry.get("sources") or []
+                if sources:
+                    st.markdown("**Nguồn**")
+                    for src in sources[:3]:
+                        page = src.get("page", "N/A")
+                        st.caption(f"[{src.get('index')}] {src.get('source')} - Trang {page}")
     else:
         st.caption("_Chưa có lịch sử._")
 
@@ -249,6 +522,7 @@ uploaded_files = st.file_uploader(
     "Chọn file PDF hoặc DOCX (có thể chọn nhiều file)",
     type=["pdf", "docx"],
     accept_multiple_files=True,
+    key=f"document_uploader_{st.session_state.upload_widget_key}",
     help="Có thể chọn nhiều file.",
 )
 
@@ -263,9 +537,18 @@ if uploaded_files:
                     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                         tmp.write(uf.getbuffer())
                         tmp_path = tmp.name
-                    n = st.session_state.rag.add_document(tmp_path, uf.name)
+                    n = st.session_state.rag.add_document(
+                        tmp_path,
+                        uf.name,
+                        chunk_size=st.session_state.chunk_size,
+                        chunk_overlap=st.session_state.chunk_overlap,
+                    )
                     st.session_state.index_ready = True
                     os.unlink(tmp_path)
+                    st.caption(
+                        f"Chunk size: {st.session_state.chunk_size}; "
+                        f"overlap: {st.session_state.chunk_overlap}"
+                    )
                     st.success(f"**{uf.name}** — {n} chunks")
                 except Exception as e:
                     st.error(f"{uf.name}: {e}")
@@ -295,7 +578,7 @@ for turn in st.session_state.chat_history:
         lat = r.get("meta", {}).get("latency", "—")
         st.markdown(
             f'<div class="rag-box">'
-            f'<div class="rag-header">⚡ RAG &nbsp;'
+            f'<div class="rag-header">RAG &nbsp;'
             f'<span style="font-weight:400;font-size:0.85em;">({lat}s)</span></div>'
             f'{r.get("answer","—")}'
             f'</div>',
