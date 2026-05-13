@@ -3,7 +3,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-HISTORY_FILE = Path("data/chat_history.json")
+ROOT_DIR = Path(__file__).resolve().parents[2]
+HISTORY_FILE = ROOT_DIR / "data" / "chat_history.json"
 
 def _load_history():
     if not HISTORY_FILE.exists():

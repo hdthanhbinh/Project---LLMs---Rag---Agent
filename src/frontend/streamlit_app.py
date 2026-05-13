@@ -271,7 +271,7 @@ if uploaded_files:
                     st.error(f"{uf.name}: {e}")
         st.rerun()
     else:
-        st.info(f"✅ Tất cả file đã được nạp ({len(already)} file)")
+        st.info(f"Tất cả file đã được nạp ({len(already)} file)")
 
 st.markdown("---")
 
