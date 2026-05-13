@@ -147,7 +147,7 @@ with st.sidebar:
     st.markdown("### Hướng dẫn")
     st.markdown("""
 1. Upload **PDF / DOCX** (nhiều file)
-2. Đặt câu hỏi → hệ thống chạy **RAG** và **CoRAG** song song
+2. Đặt câu hỏi → hệ thống chạy **RAG** và **CoRAG** tuần tự
 3. So sánh kết quả, thời gian xử lý
 """)
     st.markdown("---")
@@ -249,7 +249,7 @@ uploaded_files = st.file_uploader(
     "Chọn file PDF hoặc DOCX (có thể chọn nhiều file)",
     type=["pdf", "docx"],
     accept_multiple_files=True,
-    help="Tối đa 50MB/file.",
+    help="Có thể chọn nhiều file.",
 )
 
 if uploaded_files:

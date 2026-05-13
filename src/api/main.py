@@ -19,7 +19,6 @@ import traceback
 
 DATA_DIR = Path("data/uploads")
 SUPPORTED_EXTENSIONS = {".pdf", ".docx"}
-MAX_FILE_SIZE = 50 * 1024 * 1024  
 
 class DocumentFilter(BaseModel):
     sources: list[str] | None = None        
@@ -240,11 +239,8 @@ async def upload(files: list[UploadFile] = File(...)):
             skipped.append(f"{file.filename} (định dạng không hỗ trợ)")
             continue
 
-        # Validate size
+        # Read file content
         content = await file.read()
-        if len(content) > MAX_FILE_SIZE:
-            skipped.append(f"{file.filename} (vượt quá 50MB)")
-            continue
 
         # Lưu file
         DATA_DIR.mkdir(parents=True, exist_ok=True)
