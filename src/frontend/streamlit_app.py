@@ -21,7 +21,7 @@ from app import RAGChain, DocumentFilter
 # ------------------------------------------------------------------ #
 st.set_page_config(
     page_title="SmartDoc AI — RAG vs CoRAG",
-    page_icon="📄",
+    page_icon="",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -141,10 +141,10 @@ init_session()
 #  Sidebar                                                             #
 # ------------------------------------------------------------------ #
 with st.sidebar:
-    st.markdown("## 📄 SmartDoc AI")
+    st.markdown("## SmartDoc AI")
     st.markdown("---")
 
-    st.markdown("### 📖 Hướng dẫn")
+    st.markdown("### Hướng dẫn")
     st.markdown("""
 1. Upload **PDF / DOCX** (nhiều file)
 2. Đặt câu hỏi → hệ thống chạy **RAG** và **CoRAG** tuần tự
@@ -152,44 +152,44 @@ with st.sidebar:
 """)
     st.markdown("---")
 
-    st.markdown("### ⚙️ Cấu hình")
-    st.markdown("**Model:** `qwen2.5:1.7b`")
+    st.markdown("### Cấu hình")
+    st.markdown("**Model:** `qwen2.5:1.5b`")
     st.markdown("**Embedding:** `MPNet 768-dim`")
     st.markdown("**Retriever:** Hybrid (FAISS + BM25)")
 
     loaded = st.session_state.rag.get_loaded_files()
     if loaded:
-        st.success(f"✅ Đã index **{len(loaded)}** file")
+        st.success(f"Đã index **{len(loaded)}** file")
         for fname in loaded:
-            st.markdown(f'<span class="file-tag">📄 {fname}</span>', unsafe_allow_html=True)
+            st.markdown(f'<span class="file-tag">{fname}</span>', unsafe_allow_html=True)
 
     st.markdown("---")
 
     # Bộ lọc
-    st.markdown("### 🔍 Lọc tài liệu")
+    st.markdown("### Lọc tài liệu")
     if loaded and st.session_state.index_ready:
-        options     = ["🌐 Tất cả tài liệu"] + loaded
+        options     = ["Tất cả tài liệu"] + loaded
         current_idx = 0
         if st.session_state.filter_source in loaded:
             current_idx = loaded.index(st.session_state.filter_source) + 1
 
         selected = st.selectbox("Tìm trong:", options=options, index=current_idx,
                                 key="filter_selectbox")
-        if selected == "🌐 Tất cả tài liệu":
+        if selected == "Tất cả tài liệu":
             st.session_state.filter_source  = None
             st.session_state.filter_enabled = False
-            st.caption("🌐 Tìm kiếm toàn bộ tài liệu")
+            st.caption("Tìm kiếm toàn bộ tài liệu")
         else:
             st.session_state.filter_source  = selected
             st.session_state.filter_enabled = True
-            st.caption(f"🎯 Đang lọc: `{selected}`")
+            st.caption(f"Đang lọc: `{selected}`")
     else:
         st.caption("_Upload tài liệu để kích hoạt bộ lọc._")
 
     st.markdown("---")
 
     # Xoá
-    st.markdown("### 🗑️ Xoá dữ liệu")
+    st.markdown("### Xoá dữ liệu")
     c1, c2 = st.columns(2)
     with c1:
         if st.button("Xoá chat", use_container_width=True):
@@ -209,7 +209,7 @@ with st.sidebar:
     st.markdown("---")
 
     # Lịch sử
-    st.markdown("### 💬 Lịch sử")
+    st.markdown("### Lịch sử")
     try:
         hist = st.session_state.rag.get_history()
     except Exception:
@@ -237,13 +237,13 @@ with st.sidebar:
 # ------------------------------------------------------------------ #
 #  Main                                                                #
 # ------------------------------------------------------------------ #
-st.markdown('<p class="main-header">📄 SmartDoc AI</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-header">RAG vs CoRAG — So sánh song song</p>', unsafe_allow_html=True)
+st.markdown('<p class="main-header">SmartDoc AI</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-header">RAG vs CoRAG — So sánh tuần tự</p>', unsafe_allow_html=True)
 
 # ------------------------------------------------------------------ #
 #  Upload                                                              #
 # ------------------------------------------------------------------ #
-st.markdown("### 📂 Upload tài liệu")
+st.markdown("### Upload tài liệu")
 
 uploaded_files = st.file_uploader(
     "Chọn file PDF hoặc DOCX (có thể chọn nhiều file)",
@@ -257,7 +257,7 @@ if uploaded_files:
     new_files = [f for f in uploaded_files if f.name not in already]
     if new_files:
         for uf in new_files:
-            with st.spinner(f"⏳ Đang xử lý **{uf.name}**..."):
+            with st.spinner(f"Đang xử lý **{uf.name}**..."):
                 try:
                     suffix = Path(uf.name).suffix
                     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -266,9 +266,9 @@ if uploaded_files:
                     n = st.session_state.rag.add_document(tmp_path, uf.name)
                     st.session_state.index_ready = True
                     os.unlink(tmp_path)
-                    st.success(f"✅ **{uf.name}** — {n} chunks")
+                    st.success(f"**{uf.name}** — {n} chunks")
                 except Exception as e:
-                    st.error(f"❌ {uf.name}: {e}")
+                    st.error(f"{uf.name}: {e}")
         st.rerun()
     else:
         st.info(f"✅ Tất cả file đã được nạp ({len(already)} file)")
@@ -278,12 +278,12 @@ st.markdown("---")
 # ------------------------------------------------------------------ #
 #  Hiển thị lịch sử chat (2 cột)                                      #
 # ------------------------------------------------------------------ #
-st.markdown("### 💬 Hỏi đáp — RAG vs CoRAG")
+st.markdown("### Hỏi đáp — RAG vs CoRAG")
 
 for turn in st.session_state.chat_history:
     # Câu hỏi
     st.markdown(
-        f'<div class="user-bubble">🧑 {turn["question"]}</div>',
+        f'<div class="user-bubble">{turn["question"]}</div>',
         unsafe_allow_html=True,
     )
 
@@ -306,7 +306,7 @@ for turn in st.session_state.chat_history:
                 for src in r["sources"]:
                     st.markdown(
                         f'<div class="source-box"><b>[{src["index"]}]</b> '
-                        f'📄 {src["source"]} — Trang {src["page"]}<br>'
+                        f'{src["source"]} — Trang {src["page"]}<br>'
                         f'<i>{src["content"][:180]}{"..." if len(src["content"])>180 else ""}</i>'
                         f'</div>',
                         unsafe_allow_html=True,
@@ -321,12 +321,12 @@ for turn in st.session_state.chat_history:
         # Hiển thị sub-questions
         sub_html = ""
         if sub_qs:
-            chips = "".join(f'<span class="subq-chip">🔍 {q}</span>' for q in sub_qs)
+            chips = "".join(f'<span class="subq-chip">{q}</span>' for q in sub_qs)
             sub_html = f'<div style="margin-bottom:8px;">{chips}</div>'
 
         st.markdown(
             f'<div class="corag-box">'
-            f'<div class="corag-header">🧠 CoRAG &nbsp;'
+            f'<div class="corag-header">CoRAG &nbsp;'
             f'<span style="font-weight:400;font-size:0.85em;">({lat2}s)</span></div>'
             f'{sub_html}'
             f'{c.get("answer","—")}'
@@ -338,7 +338,7 @@ for turn in st.session_state.chat_history:
                 for src in c["sources"]:
                     st.markdown(
                         f'<div class="source-box"><b>[{src["index"]}]</b> '
-                        f'📄 {src["source"]} — Trang {src["page"]}<br>'
+                        f'{src["source"]} — Trang {src["page"]}<br>'
                         f'<i>{src["content"][:180]}{"..." if len(src["content"])>180 else ""}</i>'
                         f'</div>',
                         unsafe_allow_html=True,
@@ -374,10 +374,10 @@ if question:
     rag_chain = st.session_state.rag
 
     # Chạy TUẦN TỰ: RAG trước, CoRAG sau — đo thời gian chính xác từng bước
-    with st.spinner("⚡ Đang chạy RAG..."):
+    with st.spinner("Đang chạy RAG..."):
         result_rag = rag_chain.ask_rag(question, doc_filter, save_history=True)
  
-    with st.spinner("🧠 Đang chạy CoRAG (decompose → retrieve → synthesize)..."):
+    with st.spinner("Đang chạy CoRAG (decompose → retrieve → synthesize)..."):
         result_corag = rag_chain.ask_corag(question, doc_filter, save_history=True)
  
     st.session_state.chat_history.append({
