@@ -92,16 +92,18 @@ Ngay lap: 2026-05-14
 
 **Da co**
 
-- RAG/CoRAG tra ve `sources` gom `index`, `source`, `page`, `content`.
+- RAG/CoRAG tra ve `sources` gom `index`, `source`, `page`, `page_number`, `file_type`, `source_path`, `chunk_id`, `char_start`, `char_end`, `content`.
 - UI hien thi nguon trong expander cho RAG va CoRAG.
-- Prompt yeu cau cite source/page khi co the.
+- UI co highlight chunk/context da duoc dung lam nguon.
+- UI co the xem PDF goc trong expander neu file duoc upload qua Streamlit/API va con trong `data/uploads`.
+- Prompt yeu cau citation bat buoc dang `[1]`, `[2]`.
+- Service tu append `Nguon tham khao: [1], [2]` neu LLM quen citation.
 
 **Con thieu / can lam**
 
-- Chua co click de mo/xem context goc trong PDF.
-- Chua co highlight doan van duoc dung de tra loi.
-- Vi tri trong PDF moi co page, chua co toa do/section/offset.
-- Citation trong answer phu thuoc LLM, chua co format bat buoc nhu `[1]`, `[2]`.
+- Chua co highlight truc tiep tren canvas/trang PDF, moi highlight chunk text trong UI.
+- Vi tri trong PDF moi co page va offset text da trich xuat, chua co toa do bounding box/section heading.
+- Citation fallback moi gan nguon o cuoi cau tra loi, chua dam bao citation dung cho tung claim neu LLM khong tu lam dung.
 
 ### 6. Implement Conversational RAG
 

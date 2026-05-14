@@ -69,8 +69,10 @@ class HybridRetriever:
     def _make_key(self, doc) -> str:
         source = doc.metadata.get("source", "")
         page = str(doc.metadata.get("page", ""))
-        key = source + page
-        return key if key.strip() else doc.page_content[:100]
+        chunk_id = str(doc.metadata.get("chunk_id", ""))
+        content_sig = (doc.page_content or "")[:120]
+        key = "|".join([source, page, chunk_id, content_sig])
+        return key if key.strip("|") else content_sig
 
     def retrieve(self, query: str, filter=None) -> list:
         semantic_docs = self.semantic_retriever.vector_store\

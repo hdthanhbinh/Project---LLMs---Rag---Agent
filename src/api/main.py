@@ -40,7 +40,14 @@ class Question(BaseModel):
 class SourceItem(BaseModel):
     index: int
     source: str
-    page: int
+    page: str
+    page_number: int | None = None
+    file_type: str | None = None
+    source_path: str | None = None
+    chunk_id: str | None = None
+    chunk_index: int | None = None
+    char_start: int | None = None
+    char_end: int | None = None
     content: str
 
 

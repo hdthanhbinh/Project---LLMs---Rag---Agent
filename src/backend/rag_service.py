@@ -1,6 +1,7 @@
 from typing import Any
 import time
 import torch
+import re
 
 print("CUDA available:", torch.cuda.is_available())
 if torch.cuda.is_available():
@@ -29,6 +30,25 @@ class RagService:
             trimmed = trimmed.rsplit(" ", 1)[0]
         return f"{trimmed}..."
 
+    def _page_label(self, metadata: dict[str, Any]) -> str:
+        file_type = str(metadata.get("file_type", "")).lstrip(".").lower()
+        page = metadata.get("page")
+
+        # DOCX files don't have page numbers
+        if file_type == "docx":
+            return "N/A"
+        
+        # For PDF, page is 0-indexed from PDFPlumberLoader; convert to 1-indexed for display
+        if page is None or page == "":
+            return "N/A"
+        
+        try:
+            page_num = int(page)
+            # Convert 0-indexed to 1-indexed for display
+            return str(page_num + 1)
+        except (TypeError, ValueError):
+            return "N/A"
+
     def select_docs(self, docs: list) -> list:
         selected = []
         seen = set()
@@ -51,21 +71,43 @@ class RagService:
     def build_sources(self, docs: list) -> list[dict[str, Any]]:
         sources = []
         for i, doc in enumerate(docs, 1):
-            page = doc.metadata.get("page") or 0
-            try:
-                page = int(page)
-            except (TypeError, ValueError):
-                page = 0
+            metadata = doc.metadata or {}
+            page_label = self._page_label(metadata)
 
             sources.append(
                 {
                     "index": i,
-                    "source": doc.metadata.get("source", "unknown"),
-                    "page": page,
+                    "source": metadata.get("source", "unknown"),
+                    "page": page_label,
+                    "page_number": metadata.get("page"),
+                    "file_type": metadata.get("file_type"),
+                    "source_path": metadata.get("source_path"),
+                    "chunk_id": metadata.get("chunk_id"),
+                    "chunk_index": metadata.get("chunk_index"),
+                    "char_start": metadata.get("char_start"),
+                    "char_end": metadata.get("char_end"),
                     "content": doc.page_content,
                 }
             )
         return sources
+
+    def _append_citations_if_missing(self, answer_text: str, sources: list[dict[str, Any]]) -> str:
+        if not sources:
+            return answer_text
+
+        if "Tôi không tìm thấy thông tin phù hợp" in (answer_text or ""):
+            return answer_text
+
+        if re.search(r"\[(\d+)\]", answer_text or ""):
+            return answer_text
+
+        citation_list = ", ".join(f"[{src['index']}]" for src in sources)
+        stripped = (answer_text or "").rstrip()
+        if not stripped:
+            return f"Nguồn tham khảo: {citation_list}."
+        if stripped.endswith((".", "!", "?", ":")):
+            return f"{stripped} Nguồn tham khảo: {citation_list}."
+        return f"{stripped}. Nguồn tham khảo: {citation_list}."
 
     def build_response(
         self,
@@ -87,28 +129,11 @@ class RagService:
         }
 
     def format_context(self, results: list) -> str:
-        blocks = []
-        total_chars = 0
-
-        for i, doc in enumerate(results, 1):
-            remaining = self.MAX_CONTEXT_CHARS_TOTAL - total_chars
-            if remaining <= 80:
-                break
-
-            per_doc_limit = min(self.MAX_CONTEXT_CHARS_PER_DOC, remaining)
-            content = self.compact_text(doc.page_content, per_doc_limit)
-            if not content:
-                continue
-
-            block = (
-                f"[Tai lieu {i}] Nguon: {doc.metadata.get('source', 'unknown')}, "
-                f"Trang: {doc.metadata.get('page', 0)}\n"
-                f"Noi dung: {content}"
-            )
-            blocks.append(block)
-            total_chars += len(block)
-
-        return "\n\n".join(blocks)
+        return self.prompt_builder.format_citation_context(
+            results,
+            max_context_chars_per_doc=self.MAX_CONTEXT_CHARS_PER_DOC,
+            max_context_chars_total=self.MAX_CONTEXT_CHARS_TOTAL,
+        )
 
     def invoke_with_fallback(self, question: str, docs: list):
         prompt_template = self.prompt_builder.get_rag_prompt()
@@ -157,6 +182,7 @@ class RagService:
         try:
             response, docs_used = self.invoke_with_fallback(question, docs)
             answer_text = getattr(response, "content", str(response)).strip()
+            answer_text = self._append_citations_if_missing(answer_text, self.build_sources(docs_used))
         except Exception as exc:
             err_text = str(exc).lower()
             if "winerror 10061" in err_text or "connection refused" in err_text:

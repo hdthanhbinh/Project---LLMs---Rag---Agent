@@ -72,12 +72,23 @@ def load_document(file_paths):
 		date_uploaded = datetime.now().isoformat()
 		for document in documents:
 			metadata = dict(document.metadata or {})
+			original_page = metadata.get("page")
+			
+			# Standardize page format: always int or None (never string)
+			page_value = None
+			if original_page is not None:
+				try:
+					page_value = int(original_page)
+				except (TypeError, ValueError):
+					page_value = None
+			
 			metadata.update(
 				{
 					"source": path.name,
-					# "file_type": suffix, 
+					"source_path": str(path.resolve()),
 					"file_type": suffix.lstrip("."),   
 					"date_uploaded": date_uploaded,
+					"page": page_value,  # Always int or None
 				}
 			)
 			document.metadata = metadata
@@ -109,8 +120,32 @@ def split_text(documents, chunk_size=1000, chunk_overlap=100):
 				"chunk_overlap": chunk_overlap,
 			}
 		)
-		for chunk_text in text_splitter.split_text(document.page_content):
-			chunks.append(Document(page_content=chunk_text, metadata=dict(base_metadata)))
+		cursor = 0
+		for chunk_index, chunk_text in enumerate(text_splitter.split_text(document.page_content), 1):
+			start = document.page_content.find(chunk_text, cursor)
+			if start < 0:
+				start = document.page_content.find(chunk_text)
+			if start < 0:
+				start = None
+				end = None
+			else:
+				end = start + len(chunk_text)
+				cursor = max(start + 1, end - chunk_overlap)
+
+			chunk_metadata = dict(base_metadata)
+			chunk_metadata.update(
+				{
+					"chunk_index": chunk_index,
+					"chunk_id": (
+						f"{base_metadata.get('source', 'unknown')}:"
+						f"{base_metadata.get('page', 'na')}:"
+						f"{chunk_index}"
+					),
+					"char_start": start,
+					"char_end": end,
+				}
+			)
+			chunks.append(Document(page_content=chunk_text, metadata=chunk_metadata))
 
 	return chunks
 

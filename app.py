@@ -69,10 +69,16 @@ class RAGChain:
         docs   = load_document(file_path)
         chunks = split_text(docs, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
 
-        for chunk in chunks:
+        resolved_file_path = str(Path(file_path).resolve())
+        for idx, chunk in enumerate(chunks, 1):
             chunk.metadata["source"] = original_name
+            chunk.metadata["source_path"] = resolved_file_path
             chunk.metadata["chunk_size"] = chunk_size
             chunk.metadata["chunk_overlap"] = chunk_overlap
+            chunk.metadata["chunk_index"] = idx
+            chunk.metadata["chunk_id"] = (
+                f"{original_name}:{chunk.metadata.get('page', 'na')}:{idx}"
+            )
 
         self.loaded_files[original_name] = chunks
         self.all_chunks = [c for cs in self.loaded_files.values() for c in cs]

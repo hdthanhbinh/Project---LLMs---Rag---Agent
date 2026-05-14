@@ -4,12 +4,16 @@ import sys
 import os
 import time
 import tempfile
+import html
+import base64
 from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 ROOT = Path(__file__).resolve().parents[2]
+DATA_UPLOADS_DIR = ROOT / "data" / "uploads"
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -114,6 +118,55 @@ st.markdown("""
     background: #FFF8E1; border-left: 3px solid #FFC107;
     padding: 6px 10px; border-radius: 4px;
     font-size: 0.82em; margin-top: 4px; color: #212529;
+}
+.citation-source-box {
+    background: #FFFDF2;
+    border: 1px solid #E7C65A;
+    border-left: 5px solid #D39E00;
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-top: 8px;
+    color: #1f1f1f;
+}
+.citation-source-title {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 8px;
+    font-weight: 700;
+}
+.citation-badge {
+    display: inline-block;
+    background: #2B2B2B;
+    color: #FFF8E1;
+    border-radius: 999px;
+    padding: 2px 9px;
+    font-size: 0.8rem;
+}
+.citation-context {
+    background: #FFFFFF;
+    border-radius: 8px;
+    border: 1px solid #EDDDA3;
+    padding: 10px 12px;
+    white-space: pre-wrap;
+    line-height: 1.5;
+}
+.source-highlight {
+    background: #FFF1A8;
+    color: #1f1f1f;
+    border-radius: 4px;
+    padding: 1px 2px;
+}
+.citation-summary {
+    display: inline-block;
+    background: #EAF3FF;
+    color: #0B5ED7;
+    border: 1px solid #9DC5FF;
+    border-radius: 999px;
+    padding: 3px 10px;
+    font-size: 0.82em;
+    margin-top: 6px;
 }
 /* Metric badge */
 .badge-rag   { background:#007BFF22; color:#007BFF; border:1px solid #007BFF55;
@@ -238,6 +291,125 @@ def init_session():
             st.session_state[k] = v
 
 init_session()
+
+
+def citation_labels(sources: list[dict]) -> str:
+    if not sources:
+        return ""
+    return ", ".join(f"[{src.get('index')}]" for src in sources if src.get("index") is not None)
+
+
+def page_display(src: dict) -> str:
+    if not src:
+        return "N/A"
+    if src.get("page_number") not in (None, ""):
+        try:
+            return str(int(src["page_number"]) + 1)
+        except (TypeError, ValueError):
+            pass
+
+    page = src.get("page", "N/A")
+    if page in (None, "", "N/A"):
+        return "N/A"
+    if isinstance(page, int):
+        return str(page + 1)
+    if isinstance(page, str) and page.isdigit():
+        return str(int(page) + 1)
+    return str(page)
+
+
+def render_source_expander(src: dict, prefix: str = "Nguồn") -> None:
+    index = src.get("index", "?")
+    source_name = src.get("source", "unknown")
+    page = page_display(src)
+    content = src.get("content", "")
+    title = f"[{index}] {source_name} — Trang {page}"
+    with st.expander(title, expanded=False):
+        st.markdown(
+            f'<div class="citation-source-box">'
+            f'<div class="citation-source-title">'
+            f'<span class="citation-badge">[{index}]</span>'
+            f'<span>{source_name}</span>'
+            f'<span class="citation-badge">Trang {page}</span>'
+            f'</div>'
+            f'<div class="citation-context">{html.escape(str(content))}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+
+def source_file_path(src: dict) -> Path | None:
+    raw_path = src.get("source_path")
+    if not raw_path:
+        return None
+    path = Path(raw_path)
+    try:
+        resolved = path.resolve()
+        uploads_root = DATA_UPLOADS_DIR.resolve()
+        if uploads_root not in resolved.parents and resolved != uploads_root:
+            return None
+    except OSError:
+        return None
+    return resolved if resolved.exists() and resolved.is_file() else None
+
+
+def highlighted_context(content: str) -> str:
+    escaped = html.escape(str(content or ""))
+    return f'<mark class="source-highlight">{escaped}</mark>'
+
+
+def render_source_expander(src: dict, prefix: str = "Nguon") -> None:
+    index = src.get("index", "?")
+    source_name = src.get("source", "unknown")
+    page = page_display(src)
+    content = src.get("content", "")
+    chunk_id = src.get("chunk_id") or "N/A"
+    char_start = src.get("char_start")
+    char_end = src.get("char_end")
+    source_name_html = html.escape(str(source_name))
+    title = f"[{index}] {source_name} - Trang {page}"
+
+    with st.expander(title, expanded=False):
+        st.markdown(
+            f'<div class="citation-source-box">'
+            f'<div class="citation-source-title">'
+            f'<span class="citation-badge">[{index}]</span>'
+            f'<span>{source_name_html}</span>'
+            f'<span class="citation-badge">Trang {page}</span>'
+            f'<span class="citation-badge">Chunk {html.escape(str(chunk_id))}</span>'
+            f'</div>'
+            f'<div class="citation-context">{highlighted_context(content)}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        if char_start is not None and char_end is not None:
+            st.caption(f"Offset trong text da trich xuat: {char_start}-{char_end}")
+
+        path = source_file_path(src)
+        if path and path.suffix.lower() == ".pdf":
+            page_fragment = page if page != "N/A" else "1"
+            with path.open("rb") as fh:
+                encoded_pdf = base64.b64encode(fh.read()).decode("ascii")
+            components.html(
+                f"""
+                <iframe
+                    src="data:application/pdf;base64,{encoded_pdf}#page={page_fragment}"
+                    width="100%"
+                    height="520"
+                    style="border:1px solid #E0D2A0;border-radius:8px;"
+                ></iframe>
+                """,
+                height=540,
+            )
+        elif path:
+            st.download_button(
+                "Tai file goc",
+                data=path.read_bytes(),
+                file_name=path.name,
+                mime="application/octet-stream",
+                use_container_width=True,
+                key=f"download_source_{index}_{chunk_id}",
+            )
 
 
 def run_chunk_strategy_evaluation(uploaded_eval_files) -> tuple[list[dict], str]:
@@ -499,10 +671,9 @@ with st.sidebar:
 
                 sources = entry.get("sources") or []
                 if sources:
-                    st.markdown("**Nguồn**")
+                    st.markdown(f'<div class="citation-summary">Trích dẫn: {citation_labels(sources[:3])}</div>', unsafe_allow_html=True)
                     for src in sources[:3]:
-                        page = src.get("page", "N/A")
-                        st.caption(f"[{src.get('index')}] {src.get('source')} - Trang {page}")
+                        render_source_expander(src)
     else:
         st.caption("_Chưa có lịch sử._")
 
@@ -534,17 +705,16 @@ if uploaded_files:
             with st.spinner(f"Đang xử lý **{uf.name}**..."):
                 try:
                     suffix = Path(uf.name).suffix
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                        tmp.write(uf.getbuffer())
-                        tmp_path = tmp.name
+                    DATA_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+                    upload_path = DATA_UPLOADS_DIR / Path(uf.name).name
+                    upload_path.write_bytes(uf.getbuffer())
                     n = st.session_state.rag.add_document(
-                        tmp_path,
+                        str(upload_path),
                         uf.name,
                         chunk_size=st.session_state.chunk_size,
                         chunk_overlap=st.session_state.chunk_overlap,
                     )
                     st.session_state.index_ready = True
-                    os.unlink(tmp_path)
                     st.caption(
                         f"Chunk size: {st.session_state.chunk_size}; "
                         f"overlap: {st.session_state.chunk_overlap}"
@@ -585,15 +755,12 @@ for turn in st.session_state.chat_history:
             unsafe_allow_html=True,
         )
         if r.get("sources"):
-            with st.expander("📎 Nguồn (RAG)", expanded=False):
-                for src in r["sources"]:
-                    st.markdown(
-                        f'<div class="source-box"><b>[{src["index"]}]</b> '
-                        f'{src["source"]} — Trang {src["page"]}<br>'
-                        f'<i>{src["content"][:180]}{"..." if len(src["content"])>180 else ""}</i>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
+            st.markdown(
+                f'<div class="citation-summary">Trích dẫn: {citation_labels(r["sources"])}</div>',
+                unsafe_allow_html=True,
+            )
+            for src in r["sources"]:
+                render_source_expander(src)
 
     # ── Cột CoRAG ──
     with col_corag:
@@ -617,15 +784,12 @@ for turn in st.session_state.chat_history:
             unsafe_allow_html=True,
         )
         if c.get("sources"):
-            with st.expander("📎 Nguồn (CoRAG)", expanded=False):
-                for src in c["sources"]:
-                    st.markdown(
-                        f'<div class="source-box"><b>[{src["index"]}]</b> '
-                        f'{src["source"]} — Trang {src["page"]}<br>'
-                        f'<i>{src["content"][:180]}{"..." if len(src["content"])>180 else ""}</i>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
+            st.markdown(
+                f'<div class="citation-summary">Trích dẫn: {citation_labels(c["sources"])}</div>',
+                unsafe_allow_html=True,
+            )
+            for src in c["sources"]:
+                render_source_expander(src)
 
     # So sánh latency nhanh
     try:

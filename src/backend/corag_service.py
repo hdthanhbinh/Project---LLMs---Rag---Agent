@@ -96,42 +96,70 @@ class CoRAGService:
     #  Format context có ghi rõ sub-question nào tìm ra chunk nào          #
     # ------------------------------------------------------------------ #
     def format_context(self, docs: list) -> str:
-        blocks = []
-        total  = 0
+        return self.prompt_builder.format_citation_context(
+            docs,
+            max_context_chars_per_doc=self.MAX_CONTEXT_PER_DOC,
+            max_context_chars_total=self.MAX_CONTEXT_TOTAL,
+        )
 
-        for i, doc in enumerate(docs, 1):
-            remaining = self.MAX_CONTEXT_TOTAL - total
-            if remaining <= 80:
-                break
-            limit   = min(self.MAX_CONTEXT_PER_DOC, remaining)
-            content = " ".join(doc.page_content.split())
-            content = content[:limit] + ("..." if len(content) > limit else "")
+    def _page_label(self, metadata: dict[str, Any]) -> str:
+        """Unified page formatting: 0-indexed PDF → 1-indexed display, DOCX → N/A"""
+        file_type = str(metadata.get("file_type", "")).lstrip(".").lower()
+        page = metadata.get("page")
 
-            block = (
-                f"[Doc {i}] Source: {doc.metadata.get('source','unknown')}, "
-                f"Page: {doc.metadata.get('page', 0)}\n"
-                f"Content: {content}"
-            )
-            blocks.append(block)
-            total += len(block)
-
-        return "\n\n".join(blocks)
+        # DOCX files don't have page numbers
+        if file_type == "docx":
+            return "N/A"
+        
+        # For PDF, page is 0-indexed from PDFPlumberLoader; convert to 1-indexed for display
+        if page is None or page == "":
+            return "N/A"
+        
+        try:
+            page_num = int(page)
+            # Convert 0-indexed to 1-indexed for display
+            return str(page_num + 1)
+        except (TypeError, ValueError):
+            return "N/A"
 
     def build_sources(self, docs: list) -> list[dict[str, Any]]:
         sources = []
         for i, doc in enumerate(docs, 1):
-            page = doc.metadata.get("page") or 0
-            try:
-                page = int(page)
-            except (TypeError, ValueError):
-                page = 0
+            metadata = doc.metadata or {}
+            page_label = self._page_label(metadata)
+
             sources.append({
                 "index":   i,
-                "source":  doc.metadata.get("source", "unknown"),
-                "page":    page,
+                "source":  metadata.get("source", "unknown"),
+                "page":    page_label,
+                "page_number": metadata.get("page"),
+                "file_type": metadata.get("file_type"),
+                "source_path": metadata.get("source_path"),
+                "chunk_id": metadata.get("chunk_id"),
+                "chunk_index": metadata.get("chunk_index"),
+                "char_start": metadata.get("char_start"),
+                "char_end": metadata.get("char_end"),
                 "content": doc.page_content,
             })
         return sources
+
+    def _append_citations_if_missing(self, answer_text: str, sources: list[dict[str, Any]]) -> str:
+        if not sources:
+            return answer_text
+
+        if "Tôi không tìm thấy thông tin phù hợp" in (answer_text or ""):
+            return answer_text
+
+        if re.search(r"\[(\d+)\]", answer_text or ""):
+            return answer_text
+
+        citation_list = ", ".join(f"[{src['index']}]" for src in sources)
+        stripped = (answer_text or "").rstrip()
+        if not stripped:
+            return f"Nguồn tham khảo: {citation_list}."
+        if stripped.endswith((".", "!", "?", ":")):
+            return f"{stripped} Nguồn tham khảo: {citation_list}."
+        return f"{stripped}. Nguồn tham khảo: {citation_list}."
 
     # ------------------------------------------------------------------ #
     #  Bước 3: Synthesize — sinh câu trả lời cuối từ toàn bộ context       #
@@ -145,14 +173,17 @@ class CoRAGService:
             "You are a technical document assistant. "
             "Answer the main question using ONLY the provided context. "
             "Always respond in the same language as the main question. "
-            "Be concise and cite the source when possible.\n\n"
+            "Be concise. Citations are mandatory: use markers like [1], [2] "
+            "from the numbered context for every factual claim.\n\n"
             f"Main question: {question}\n\n"
             f"Sub-questions used for retrieval:\n{sub_q_text}\n\n"
             f"CONTEXT:\n{context}\n\n"
             "Instructions:\n"
             "- Use only the context above.\n"
-            "- DO NOT mention'[Doc X]' or any internal reference labels in your answer.\n"
+            "- DO NOT mention '[Doc X]' or any internal reference labels in your answer.\n"
             "- If you cannot answer based on the context, say: 'Tôi không tìm thấy thông tin phù hợp.'\n"
+            "- Citations are mandatory: use markers like [1], [2] that match the numbered references in the context.\n"
+            "- Every factual claim from the context should include at least one citation marker.\n"
             "- Be concise and clear.\n\n"
             "Answer:"
         )
@@ -200,6 +231,7 @@ class CoRAGService:
 
         # Bước 3: Synthesize
         answer_text = self.synthesize(question, sub_questions, docs)
+        answer_text = self._append_citations_if_missing(answer_text, self.build_sources(docs))
 
         return {
             "question":      question,
