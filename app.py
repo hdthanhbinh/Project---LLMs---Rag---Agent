@@ -2,6 +2,7 @@
 # app.py
 import sys
 import os
+import inspect
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,6 +49,7 @@ class RAGChain:
         self.vectorstore  = None
         self.all_chunks   = []
         self.loaded_files = {}   # { original_name: [chunk, ...] }
+        self.conversation_memory = []
 
         self.llm            = get_llm()
         self.prompt_builder = PromptBuilder()
@@ -168,6 +170,7 @@ class RAGChain:
         question: str,
         filter: DocumentFilter | None = None,
         save_history: bool = True,
+        use_conversation: bool = False,
     ) -> dict:
         """
         RAG thuần: retrieve top-k chunks → generate.
@@ -176,7 +179,19 @@ class RAGChain:
         if self.rag_service is None:
             return _not_ready(question)
 
-        result = self.rag_service.answer(question, filter=filter)
+        answer_params = inspect.signature(self.rag_service.answer).parameters
+        if use_conversation and "chat_history" not in answer_params:
+            self._rebuild_services()
+
+        if use_conversation and "chat_history" in inspect.signature(self.rag_service.answer).parameters:
+            result = self.rag_service.answer(
+                question,
+                filter=filter,
+                chat_history=self.conversation_memory,
+                rewrite_query=True,
+            )
+        else:
+            result = self.rag_service.answer(question, filter=filter)
         result["meta"]["method"] = "rag"
 
         if save_history:
@@ -191,6 +206,7 @@ class RAGChain:
         question: str,
         filter: DocumentFilter | None = None,
         save_history: bool = True,
+        use_conversation: bool = False,
     ) -> dict:
         """
         CoRAG: phân tách câu hỏi → retrieve nhiều lần → tổng hợp.
@@ -199,7 +215,19 @@ class RAGChain:
         if self.corag_service is None:
             return _not_ready(question)
 
-        result = self.corag_service.answer(question, filter=filter)
+        answer_params = inspect.signature(self.corag_service.answer).parameters
+        if use_conversation and "chat_history" not in answer_params:
+            self._rebuild_services()
+
+        if use_conversation and "chat_history" in inspect.signature(self.corag_service.answer).parameters:
+            result = self.corag_service.answer(
+                question,
+                filter=filter,
+                chat_history=self.conversation_memory,
+                rewrite_query=True,
+            )
+        else:
+            result = self.corag_service.answer(question, filter=filter)
 
         if save_history:
             _save(result)
@@ -214,7 +242,22 @@ class RAGChain:
     def get_history(self) -> list:
         return get_all_history()
 
+    def add_conversation_turn(self, question: str, answer: str) -> None:
+        question = (question or "").strip()
+        answer = (answer or "").strip()
+        if not question:
+            return
+        self.conversation_memory.append({"question": question, "answer": answer})
+        self.conversation_memory = self.conversation_memory[-8:]
+
+    def get_conversation_memory(self) -> list[dict]:
+        return list(self.conversation_memory)
+
+    def clear_conversation_memory(self) -> None:
+        self.conversation_memory = []
+
     def clear_history(self) -> None:
+        self.clear_conversation_memory()
         clear()
 
     def clear_index(self, delete_uploaded_files: bool = False) -> None:
@@ -222,6 +265,7 @@ class RAGChain:
         self.vectorstore = None
         self.all_chunks = []
         self.loaded_files = {}
+        self.conversation_memory = []
         self.rag_service = None
         self.corag_service = None
         delete_vector_store()

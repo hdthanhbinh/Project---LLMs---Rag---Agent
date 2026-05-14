@@ -562,5 +562,279 @@
       "num_docs": 4
     },
     "timestamp": "2026-05-15T01:07:29.426414"
+  },
+  {
+    "id": 15,
+    "question": "Điều gì gây timeout request?",
+    "answer": "Timeout request xảy ra do Redis memory fragmentation, khiến cache efficiency giảm mạnh và dẫn đến các vấn đề như cache miss tăng, database query tăng đột biến, CPU service tăng cao [1], [2].",
+    "sources": [
+      {
+        "index": 1,
+        "source": "Production Incident Report.pdf",
+        "page": "1",
+        "page_number": 0,
+        "file_type": "pdf",
+        "source_path": null,
+        "chunk_id": null,
+        "chunk_index": null,
+        "char_start": null,
+        "char_end": null,
+        "content": "Production Incident Report\nIncident Summary\nNgày 12/03/2026 lúc 02:13 UTC, hệ thống recommendation service bị tăng latency đột\nbiến.\nSymptoms\n• API response time tăng từ 120ms lên 4.8s\n• CPU usage tăng lên 95%\n• Redis hit rate giảm từ 92% xuống 41%\n• Khoảng 18% request timeout\nAffected Services\n• recommendation-api\n• user-profile-service\n• feature-store\nTimeline\nTime Event\n02:13 Alert từ Grafana\n02:15 On-call engineer xác nhận incident\n02:20 Scale Kubernetes pods từ 8 → 20\n02:28 Redis cluster phát hiện memory fragmentation\n02:35 Restart Redis nodes\n02:42 Latency giảm còn 300ms\n02:55 Incident resolved\nRoot Cause\nNguyên nhân chính là memory fragmentation trong Redis 6.2 khiến cache efficiency giảm\nmạnh."
+      },
+      {
+        "index": 2,
+        "source": "Production Incident Report.pdf",
+        "page": "2",
+        "page_number": 1,
+        "file_type": "pdf",
+        "source_path": null,
+        "chunk_id": null,
+        "chunk_index": null,
+        "char_start": null,
+        "char_end": null,
+        "content": "Điều này dẫn đến:\n1. Cache miss tăng\n2. Database query tăng đột biến\n3. CPU service tăng cao\n4. Request timeout\nMitigation\n• Restart Redis nodes\n• Enable active defragmentation\n• Tăng memory reservation thêm 20%\nPermanent Fix\nPlanned actions:\n• Upgrade Redis 6.2 → 7.2\n• Add autoscaling cho feature-store\n• Implement adaptive caching strategy\nSlack Conversation\nChannel: #incident-war-room\nAlice (SRE)\n“Redis memory usage looks abnormal. Fragmentation ratio is 2.7”\nBob (Backend Engineer)\n“I suspect recommendation-api is retrying too aggressively.”\nCharlie (Platform)\n“feature-store pods are throttling CPU.”\nAlice\n“After Redis restart, hit rate recovered to 89%.”\nInternal Runbook\nRedis Troubleshooting"
+      },
+      {
+        "index": 3,
+        "source": "Employee Handbook 2026.pdf",
+        "page": "2",
+        "page_number": 1,
+        "file_type": "pdf",
+        "source_path": null,
+        "chunk_id": null,
+        "chunk_index": null,
+        "char_start": null,
+        "char_end": null,
+        "content": "Nhân viên được đổi laptop nếu:\n• Thiết bị trên 4 năm tuổi\n• Pin chai dưới 60%\n• Hư hỏng phần cứng nghiêm trọng\n4. Security Policy\n• Không được chia sẻ tài khoản nội bộ.\n• Bắt buộc bật MFA cho tất cả tài khoản.\n• Không upload source code công ty lên dịch vụ public.\n5. Travel Reimbursement\nHotel\n• Tối đa:\no Việt Nam: 2,500,000 VND/đêm\no Singapore: 180 SGD/đêm\no Nhật Bản: 22,000 JPY/đêm\nMeals\n• Breakfast: 15 USD\n• Lunch: 25 USD\n• Dinner: 40 USD"
+      },
+      {
+        "index": 4,
+        "source": "Production Incident Report.pdf",
+        "page": "3",
+        "page_number": 2,
+        "file_type": "pdf",
+        "source_path": null,
+        "chunk_id": null,
+        "chunk_index": null,
+        "char_start": null,
+        "char_end": null,
+        "content": "Nếu fragmentation ratio > 1.5:\n1. Kiểm tra memory pressure\n2. Chạy Redis INFO MEMORY\n3. Restart replica trước\n4. Enable active-defrag: CONFIG SET activedefrag yes\nKubernetes Scaling\nScale deployment: kubectl scale deployment recommendation-api --replicas=20"
+      }
+    ],
+    "meta": {
+      "k": 4,
+      "latency": 144.7,
+      "model": "qwen2.5:7b",
+      "retrieval_question": "Điều gì gây timeout request?",
+      "conversation_turns": 0,
+      "method": "rag"
+    },
+    "timestamp": "2026-05-15T01:39:19.320903"
+  },
+  {
+    "id": 16,
+    "question": "Điều gì gây timeout request?",
+    "answer": "Timeout request có thể do cache miss tăng [2], dẫn đến database query tăng đột biến và CPU service tăng cao, từ đó gây ra timeout yêu cầu [2].pecifically, memory fragmentation trong Redis 6.2 làm giảm hiệu quả cache, gây ra tình trạng này [1][2].",
+    "sources": [
+      {
+        "index": 1,
+        "source": "Production Incident Report.pdf",
+        "page": "1",
+        "page_number": 0,
+        "file_type": "pdf",
+        "source_path": null,
+        "chunk_id": null,
+        "chunk_index": null,
+        "char_start": null,
+        "char_end": null,
+        "content": "Production Incident Report\nIncident Summary\nNgày 12/03/2026 lúc 02:13 UTC, hệ thống recommendation service bị tăng latency đột\nbiến.\nSymptoms\n• API response time tăng từ 120ms lên 4.8s\n• CPU usage tăng lên 95%\n• Redis hit rate giảm từ 92% xuống 41%\n• Khoảng 18% request timeout\nAffected Services\n• recommendation-api\n• user-profile-service\n• feature-store\nTimeline\nTime Event\n02:13 Alert từ Grafana\n02:15 On-call engineer xác nhận incident\n02:20 Scale Kubernetes pods từ 8 → 20\n02:28 Redis cluster phát hiện memory fragmentation\n02:35 Restart Redis nodes\n02:42 Latency giảm còn 300ms\n02:55 Incident resolved\nRoot Cause\nNguyên nhân chính là memory fragmentation trong Redis 6.2 khiến cache efficiency giảm\nmạnh."
+      },
+      {
+        "index": 2,
+        "source": "Production Incident Report.pdf",
+        "page": "2",
+        "page_number": 1,
+        "file_type": "pdf",
+        "source_path": null,
+        "chunk_id": null,
+        "chunk_index": null,
+        "char_start": null,
+        "char_end": null,
+        "content": "Điều này dẫn đến:\n1. Cache miss tăng\n2. Database query tăng đột biến\n3. CPU service tăng cao\n4. Request timeout\nMitigation\n• Restart Redis nodes\n• Enable active defragmentation\n• Tăng memory reservation thêm 20%\nPermanent Fix\nPlanned actions:\n• Upgrade Redis 6.2 → 7.2\n• Add autoscaling cho feature-store\n• Implement adaptive caching strategy\nSlack Conversation\nChannel: #incident-war-room\nAlice (SRE)\n“Redis memory usage looks abnormal. Fragmentation ratio is 2.7”\nBob (Backend Engineer)\n“I suspect recommendation-api is retrying too aggressively.”\nCharlie (Platform)\n“feature-store pods are throttling CPU.”\nAlice\n“After Redis restart, hit rate recovered to 89%.”\nInternal Runbook\nRedis Troubleshooting"
+      },
+      {
+        "index": 3,
+        "source": "Employee Handbook 2026.pdf",
+        "page": "1",
+        "page_number": 0,
+        "file_type": "pdf",
+        "source_path": null,
+        "chunk_id": null,
+        "chunk_index": null,
+        "char_start": null,
+        "char_end": null,
+        "content": "Employee Handbook 2026\n1. Working Hours\nNhân viên làm việc từ thứ Hai đến thứ Sáu.\n• Giờ làm việc chuẩn: 9:00 AM – 6:00 PM\n• Nghỉ trưa: 12:00 PM – 1:00 PM\n• Nhân viên có thể làm hybrid tối đa 3 ngày/tuần.\n• Các team Infrastructure và Security phải có mặt tại văn phòng ít nhất 4 ngày/tuần.\n2. Leave Policy\nAnnual Leave\n• Nhân viên dưới 2 năm kinh nghiệm: 12 ngày phép/năm.\n• Nhân viên từ 2–5 năm: 15 ngày phép/năm.\n• Nhân viên trên 5 năm: 18 ngày phép/năm.\nSick Leave\n• Tối đa 10 ngày/năm.\n• Nếu nghỉ quá 3 ngày liên tiếp cần giấy xác nhận của bác sĩ.\n3. IT Support\nPassword Reset\nĐể reset mật khẩu:\n1. Truy cập portal nội bộ.\n2. Chọn “Forgot Password”.\n3. OTP sẽ gửi qua email công ty.\n4. Mật khẩu mới phải:\no ít nhất 12 ký tự\no có chữ hoa\no có số\no có ký tự đặc biệt\nLaptop Replacement"
+      },
+      {
+        "index": 4,
+        "source": "Employee Handbook 2026.pdf",
+        "page": "2",
+        "page_number": 1,
+        "file_type": "pdf",
+        "source_path": null,
+        "chunk_id": null,
+        "chunk_index": null,
+        "char_start": null,
+        "char_end": null,
+        "content": "Nhân viên được đổi laptop nếu:\n• Thiết bị trên 4 năm tuổi\n• Pin chai dưới 60%\n• Hư hỏng phần cứng nghiêm trọng\n4. Security Policy\n• Không được chia sẻ tài khoản nội bộ.\n• Bắt buộc bật MFA cho tất cả tài khoản.\n• Không upload source code công ty lên dịch vụ public.\n5. Travel Reimbursement\nHotel\n• Tối đa:\no Việt Nam: 2,500,000 VND/đêm\no Singapore: 180 SGD/đêm\no Nhật Bản: 22,000 JPY/đêm\nMeals\n• Breakfast: 15 USD\n• Lunch: 25 USD\n• Dinner: 40 USD"
+      }
+    ],
+    "meta": {
+      "latency": 184.68,
+      "model": "qwen2.5:7b",
+      "method": "corag",
+      "num_sub": 2,
+      "num_docs": 4,
+      "retrieval_question": "Điều gì gây timeout request?",
+      "conversation_turns": 0
+    },
+    "timestamp": "2026-05-15T01:42:24.023998"
+  },
+  {
+    "id": 17,
+    "question": "Ai là người đầu tiên phát hiện fragmentation?",
+    "answer": "Tôi không tìm thấy thông tin về ai là người đầu tiên phát hiện ra hiện tượng fragmentation trong bối cảnh được cung cấp [1], [2], [3], [4].",
+    "sources": [
+      {
+        "index": 1,
+        "source": "Production Incident Report.pdf",
+        "page": "1",
+        "page_number": 0,
+        "file_type": "pdf",
+        "source_path": null,
+        "chunk_id": null,
+        "chunk_index": null,
+        "char_start": null,
+        "char_end": null,
+        "content": "Production Incident Report\nIncident Summary\nNgày 12/03/2026 lúc 02:13 UTC, hệ thống recommendation service bị tăng latency đột\nbiến.\nSymptoms\n• API response time tăng từ 120ms lên 4.8s\n• CPU usage tăng lên 95%\n• Redis hit rate giảm từ 92% xuống 41%\n• Khoảng 18% request timeout\nAffected Services\n• recommendation-api\n• user-profile-service\n• feature-store\nTimeline\nTime Event\n02:13 Alert từ Grafana\n02:15 On-call engineer xác nhận incident\n02:20 Scale Kubernetes pods từ 8 → 20\n02:28 Redis cluster phát hiện memory fragmentation\n02:35 Restart Redis nodes\n02:42 Latency giảm còn 300ms\n02:55 Incident resolved\nRoot Cause\nNguyên nhân chính là memory fragmentation trong Redis 6.2 khiến cache efficiency giảm\nmạnh."
+      },
+      {
+        "index": 2,
+        "source": "Employee Handbook 2026.pdf",
+        "page": "2",
+        "page_number": 1,
+        "file_type": "pdf",
+        "source_path": null,
+        "chunk_id": null,
+        "chunk_index": null,
+        "char_start": null,
+        "char_end": null,
+        "content": "Nhân viên được đổi laptop nếu:\n• Thiết bị trên 4 năm tuổi\n• Pin chai dưới 60%\n• Hư hỏng phần cứng nghiêm trọng\n4. Security Policy\n• Không được chia sẻ tài khoản nội bộ.\n• Bắt buộc bật MFA cho tất cả tài khoản.\n• Không upload source code công ty lên dịch vụ public.\n5. Travel Reimbursement\nHotel\n• Tối đa:\no Việt Nam: 2,500,000 VND/đêm\no Singapore: 180 SGD/đêm\no Nhật Bản: 22,000 JPY/đêm\nMeals\n• Breakfast: 15 USD\n• Lunch: 25 USD\n• Dinner: 40 USD"
+      },
+      {
+        "index": 3,
+        "source": "Employee Handbook 2026.pdf",
+        "page": "1",
+        "page_number": 0,
+        "file_type": "pdf",
+        "source_path": null,
+        "chunk_id": null,
+        "chunk_index": null,
+        "char_start": null,
+        "char_end": null,
+        "content": "Employee Handbook 2026\n1. Working Hours\nNhân viên làm việc từ thứ Hai đến thứ Sáu.\n• Giờ làm việc chuẩn: 9:00 AM – 6:00 PM\n• Nghỉ trưa: 12:00 PM – 1:00 PM\n• Nhân viên có thể làm hybrid tối đa 3 ngày/tuần.\n• Các team Infrastructure và Security phải có mặt tại văn phòng ít nhất 4 ngày/tuần.\n2. Leave Policy\nAnnual Leave\n• Nhân viên dưới 2 năm kinh nghiệm: 12 ngày phép/năm.\n• Nhân viên từ 2–5 năm: 15 ngày phép/năm.\n• Nhân viên trên 5 năm: 18 ngày phép/năm.\nSick Leave\n• Tối đa 10 ngày/năm.\n• Nếu nghỉ quá 3 ngày liên tiếp cần giấy xác nhận của bác sĩ.\n3. IT Support\nPassword Reset\nĐể reset mật khẩu:\n1. Truy cập portal nội bộ.\n2. Chọn “Forgot Password”.\n3. OTP sẽ gửi qua email công ty.\n4. Mật khẩu mới phải:\no ít nhất 12 ký tự\no có chữ hoa\no có số\no có ký tự đặc biệt\nLaptop Replacement"
+      },
+      {
+        "index": 4,
+        "source": "Production Incident Report.pdf",
+        "page": "3",
+        "page_number": 2,
+        "file_type": "pdf",
+        "source_path": null,
+        "chunk_id": null,
+        "chunk_index": null,
+        "char_start": null,
+        "char_end": null,
+        "content": "Nếu fragmentation ratio > 1.5:\n1. Kiểm tra memory pressure\n2. Chạy Redis INFO MEMORY\n3. Restart replica trước\n4. Enable active-defrag: CONFIG SET activedefrag yes\nKubernetes Scaling\nScale deployment: kubectl scale deployment recommendation-api --replicas=20"
+      }
+    ],
+    "meta": {
+      "k": 4,
+      "latency": 190.68,
+      "model": "qwen2.5:7b",
+      "retrieval_question": "Ai là người đầu tiên phát hiện ra hiện tượng fragmentation?",
+      "conversation_turns": 1,
+      "method": "rag"
+    },
+    "timestamp": "2026-05-15T01:53:48.700433"
+  },
+  {
+    "id": 18,
+    "question": "Ai là người đầu tiên phát hiện fragmentation?",
+    "answer": "Tôi không tìm thấy thông tin phù hợp.",
+    "sources": [
+      {
+        "index": 1,
+        "source": "Production Incident Report.pdf",
+        "page": "1",
+        "page_number": 0,
+        "file_type": "pdf",
+        "source_path": null,
+        "chunk_id": null,
+        "chunk_index": null,
+        "char_start": null,
+        "char_end": null,
+        "content": "Production Incident Report\nIncident Summary\nNgày 12/03/2026 lúc 02:13 UTC, hệ thống recommendation service bị tăng latency đột\nbiến.\nSymptoms\n• API response time tăng từ 120ms lên 4.8s\n• CPU usage tăng lên 95%\n• Redis hit rate giảm từ 92% xuống 41%\n• Khoảng 18% request timeout\nAffected Services\n• recommendation-api\n• user-profile-service\n• feature-store\nTimeline\nTime Event\n02:13 Alert từ Grafana\n02:15 On-call engineer xác nhận incident\n02:20 Scale Kubernetes pods từ 8 → 20\n02:28 Redis cluster phát hiện memory fragmentation\n02:35 Restart Redis nodes\n02:42 Latency giảm còn 300ms\n02:55 Incident resolved\nRoot Cause\nNguyên nhân chính là memory fragmentation trong Redis 6.2 khiến cache efficiency giảm\nmạnh."
+      },
+      {
+        "index": 2,
+        "source": "Production Incident Report.pdf",
+        "page": "3",
+        "page_number": 2,
+        "file_type": "pdf",
+        "source_path": null,
+        "chunk_id": null,
+        "chunk_index": null,
+        "char_start": null,
+        "char_end": null,
+        "content": "Nếu fragmentation ratio > 1.5:\n1. Kiểm tra memory pressure\n2. Chạy Redis INFO MEMORY\n3. Restart replica trước\n4. Enable active-defrag: CONFIG SET activedefrag yes\nKubernetes Scaling\nScale deployment: kubectl scale deployment recommendation-api --replicas=20"
+      },
+      {
+        "index": 3,
+        "source": "Employee Handbook 2026.pdf",
+        "page": "2",
+        "page_number": 1,
+        "file_type": "pdf",
+        "source_path": null,
+        "chunk_id": null,
+        "chunk_index": null,
+        "char_start": null,
+        "char_end": null,
+        "content": "Nhân viên được đổi laptop nếu:\n• Thiết bị trên 4 năm tuổi\n• Pin chai dưới 60%\n• Hư hỏng phần cứng nghiêm trọng\n4. Security Policy\n• Không được chia sẻ tài khoản nội bộ.\n• Bắt buộc bật MFA cho tất cả tài khoản.\n• Không upload source code công ty lên dịch vụ public.\n5. Travel Reimbursement\nHotel\n• Tối đa:\no Việt Nam: 2,500,000 VND/đêm\no Singapore: 180 SGD/đêm\no Nhật Bản: 22,000 JPY/đêm\nMeals\n• Breakfast: 15 USD\n• Lunch: 25 USD\n• Dinner: 40 USD"
+      },
+      {
+        "index": 4,
+        "source": "Production Incident Report.pdf",
+        "page": "2",
+        "page_number": 1,
+        "file_type": "pdf",
+        "source_path": null,
+        "chunk_id": null,
+        "chunk_index": null,
+        "char_start": null,
+        "char_end": null,
+        "content": "Điều này dẫn đến:\n1. Cache miss tăng\n2. Database query tăng đột biến\n3. CPU service tăng cao\n4. Request timeout\nMitigation\n• Restart Redis nodes\n• Enable active defragmentation\n• Tăng memory reservation thêm 20%\nPermanent Fix\nPlanned actions:\n• Upgrade Redis 6.2 → 7.2\n• Add autoscaling cho feature-store\n• Implement adaptive caching strategy\nSlack Conversation\nChannel: #incident-war-room\nAlice (SRE)\n“Redis memory usage looks abnormal. Fragmentation ratio is 2.7”\nBob (Backend Engineer)\n“I suspect recommendation-api is retrying too aggressively.”\nCharlie (Platform)\n“feature-store pods are throttling CPU.”\nAlice\n“After Redis restart, hit rate recovered to 89%.”\nInternal Runbook\nRedis Troubleshooting"
+      }
+    ],
+    "meta": {
+      "latency": 166.0,
+      "model": "qwen2.5:7b",
+      "method": "corag",
+      "num_sub": 2,
+      "num_docs": 4,
+      "retrieval_question": "Ai là người đầu tiên phát hiện ra hiện tượng fragmentation?",
+      "conversation_turns": 1
+    },
+    "timestamp": "2026-05-15T01:56:34.704415"
   }
 ]

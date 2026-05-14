@@ -79,10 +79,13 @@ class PromptBuilder:
         return ChatPromptTemplate.from_messages([
             ("system", self.system_behavior),
             ("human", (
+                "CONVERSATION HISTORY:\n{conversation_history}\n\n"
                 "CONTEXT:\n{context}\n\n"
-                "QUESTION: {question}\n\n"
+                "QUESTION: {question}\n"
+                "STANDALONE QUESTION USED FOR RETRIEVAL: {retrieval_question}\n\n"
                 "Instructions:\n"
                 "- Use only the context above.\n"
+                "- Use the conversation history only to understand follow-up intent.\n"
                 "- If insufficient, say exactly: "
                 "'Tôi không tìm thấy thông tin phù hợp.'\n"
                 "- Citations are mandatory: use markers like [1], [2] that match the numbered references in the context.\n"
@@ -94,9 +97,11 @@ class PromptBuilder:
     def get_condense_question_prompt(self):
         return ChatPromptTemplate.from_messages([
             ("system", (
-                "Dua vao lich su chat ben duoi, hay dien dat lai cau hoi cua nguoi dung "
-                "thanh MOT CAU DUY NHAT, doc lap, du nghia ma khong can xem lich su. "
-                "Chi tra ve cau hoi, khong giai thich them."
+                "Rewrite the user's latest question into ONE standalone question. "
+                "Use the chat history only to resolve references like 'it', 'that', "
+                "'the previous one', or omitted subjects. "
+                "Keep the same language as the latest question. "
+                "Return only the rewritten question, no explanation."
             )),
             MessagesPlaceholder(variable_name="chat_history"),
             ("human", "{question}"),

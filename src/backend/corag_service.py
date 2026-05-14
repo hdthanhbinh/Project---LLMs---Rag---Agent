@@ -12,6 +12,7 @@
 from typing import Any
 import time
 import re
+from langchain_core.messages import AIMessage, HumanMessage
 
 
 class CoRAGService:
@@ -24,6 +25,60 @@ class CoRAGService:
         self.prompt_builder = prompt_builder
         self.retrieve       = retrieve
         self.k              = k
+
+    def compact_text(self, text: str, limit: int) -> str:
+        compact = " ".join((text or "").split())
+        if len(compact) <= limit:
+            return compact
+        trimmed = compact[: max(limit - 3, 0)].rstrip()
+        if " " in trimmed:
+            trimmed = trimmed.rsplit(" ", 1)[0]
+        return f"{trimmed}..."
+
+    def format_history(self, chat_history: list[dict[str, str]] | None) -> str:
+        if not chat_history:
+            return "No prior conversation."
+
+        lines = []
+        for turn in chat_history[-6:]:
+            user_text = self.compact_text(turn.get("question", ""), 300)
+            answer_text = self.compact_text(turn.get("answer", ""), 500)
+            lines.append(f"User: {user_text}\nAssistant: {answer_text}")
+        return "\n\n".join(lines) if lines else "No prior conversation."
+
+    def _history_messages(self, chat_history: list[dict[str, str]] | None) -> list:
+        messages = []
+        for turn in (chat_history or [])[-6:]:
+            question = (turn.get("question") or "").strip()
+            answer = (turn.get("answer") or "").strip()
+            if question:
+                messages.append(HumanMessage(content=question))
+            if answer:
+                messages.append(AIMessage(content=answer))
+        return messages
+
+    def rewrite_question(
+        self,
+        question: str,
+        chat_history: list[dict[str, str]] | None = None,
+    ) -> str:
+        if not chat_history:
+            return question
+
+        prompt_template = self.prompt_builder.get_condense_question_prompt()
+        prompt = prompt_template.invoke(
+            {
+                "chat_history": self._history_messages(chat_history),
+                "question": question,
+            }
+        )
+        try:
+            response = self.llm.invoke(prompt)
+            rewritten = getattr(response, "content", str(response)).strip()
+            return rewritten or question
+        except Exception as exc:
+            print(f"CoRAG rewrite warning: {exc}")
+            return question
 
     # ------------------------------------------------------------------ #
     #  Bước 1: Decompose câu hỏi thành sub-questions                       #
@@ -164,7 +219,14 @@ class CoRAGService:
     # ------------------------------------------------------------------ #
     #  Bước 3: Synthesize — sinh câu trả lời cuối từ toàn bộ context       #
     # ------------------------------------------------------------------ #
-    def synthesize(self, question: str, sub_questions: list[str], docs: list) -> str:
+    def synthesize(
+        self,
+        question: str,
+        sub_questions: list[str],
+        docs: list,
+        chat_history: list[dict[str, str]] | None = None,
+        retrieval_question: str | None = None,
+    ) -> str:
         context = self.format_context(docs)
 
         sub_q_text = "\n".join(f"- {q}" for q in sub_questions)
@@ -175,11 +237,14 @@ class CoRAGService:
             "Always respond in the same language as the main question. "
             "Be concise. Citations are mandatory: use markers like [1], [2] "
             "from the numbered context for every factual claim.\n\n"
-            f"Main question: {question}\n\n"
+            f"Conversation history:\n{self.format_history(chat_history)}\n\n"
+            f"Main question: {question}\n"
+            f"Standalone question used for retrieval: {retrieval_question or question}\n\n"
             f"Sub-questions used for retrieval:\n{sub_q_text}\n\n"
             f"CONTEXT:\n{context}\n\n"
             "Instructions:\n"
             "- Use only the context above.\n"
+            "- Use the conversation history only to understand follow-up intent.\n"
             "- DO NOT mention '[Doc X]' or any internal reference labels in your answer.\n"
             "- If you cannot answer based on the context, say: 'Tôi không tìm thấy thông tin phù hợp.'\n"
             "- Citations are mandatory: use markers like [1], [2] that match the numbered references in the context.\n"
@@ -197,7 +262,13 @@ class CoRAGService:
     # ------------------------------------------------------------------ #
     #  Main entry point                                                    #
     # ------------------------------------------------------------------ #
-    def answer(self, question: str, filter=None) -> dict[str, Any]:
+    def answer(
+        self,
+        question: str,
+        filter=None,
+        chat_history: list[dict[str, str]] | None = None,
+        rewrite_query: bool = True,
+    ) -> dict[str, Any]:
         start    = time.time()
         question = (question or "").strip()
 
@@ -211,7 +282,12 @@ class CoRAGService:
             }
 
         # Bước 1: Decompose
-        sub_questions = self.decompose(question)
+        retrieval_question = (
+            self.rewrite_question(question, chat_history)
+            if rewrite_query else question
+        )
+
+        sub_questions = self.decompose(retrieval_question)
 
         # Bước 2: Retrieve cho mỗi sub-question
         docs = self.retrieve_all(sub_questions, filter=filter)
@@ -226,11 +302,19 @@ class CoRAGService:
                     "latency": round(time.time() - start, 2),
                     "model":   getattr(self.llm, "model", "unknown"),
                     "method":  "corag",
+                    "retrieval_question": retrieval_question,
+                    "conversation_turns": len(chat_history or []),
                 },
             }
 
         # Bước 3: Synthesize
-        answer_text = self.synthesize(question, sub_questions, docs)
+        answer_text = self.synthesize(
+            question,
+            sub_questions,
+            docs,
+            chat_history=chat_history,
+            retrieval_question=retrieval_question,
+        )
         answer_text = self._append_citations_if_missing(answer_text, self.build_sources(docs))
 
         return {
@@ -244,5 +328,7 @@ class CoRAGService:
                 "method":  "corag",
                 "num_sub": len(sub_questions),
                 "num_docs": len(docs),
+                "retrieval_question": retrieval_question,
+                "conversation_turns": len(chat_history or []),
             },
         }

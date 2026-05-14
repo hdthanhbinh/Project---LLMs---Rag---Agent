@@ -6,6 +6,7 @@ import time
 import tempfile
 import html
 import base64
+import importlib
 from datetime import datetime
 from pathlib import Path
 
@@ -17,7 +18,19 @@ DATA_UPLOADS_DIR = ROOT / "data" / "uploads"
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
-from app import RAGChain, DocumentFilter
+for module_name in (
+    "src.backend.prompt_builder",
+    "src.backend.rag_service",
+    "src.backend.corag_service",
+    "app",
+):
+    if module_name in sys.modules:
+        importlib.reload(sys.modules[module_name])
+
+import app as rag_app
+rag_app = importlib.reload(rag_app)
+RAGChain = rag_app.RAGChain
+DocumentFilter = rag_app.DocumentFilter
 from src.evaluate_chunk_strategy import (
     CHUNK_OVERLAPS,
     CHUNK_SIZES,
@@ -273,7 +286,10 @@ st.markdown("""
 #  Session state                                                       #
 # ------------------------------------------------------------------ #
 def init_session():
-    if "rag" not in st.session_state:
+    if (
+        "rag" not in st.session_state
+        or not hasattr(st.session_state.rag, "get_conversation_memory")
+    ):
         st.session_state.rag = RAGChain()
         st.session_state.index_ready = st.session_state.rag.load_from_disk_and_build()
 
@@ -285,6 +301,7 @@ def init_session():
         "upload_widget_key": 0,
         "chunk_size": 1000,
         "chunk_overlap": 100,
+        "conversational_rag": True,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -412,6 +429,57 @@ def render_source_expander(src: dict, prefix: str = "Nguon") -> None:
             )
 
 
+def render_rag_result(result: dict, question_text: str | None = None) -> None:
+    lat = result.get("meta", {}).get("latency", "â€”")
+    st.markdown(
+        f'<div class="rag-box">'
+        f'<div class="rag-header">RAG &nbsp;'
+        f'<span style="font-weight:400;font-size:0.85em;">({lat}s)</span></div>'
+        f'{result.get("answer","â€”")}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    retrieval_q = result.get("meta", {}).get("retrieval_question")
+    if question_text and retrieval_q and retrieval_q != question_text:
+        st.caption(f"Cau hoi doc lap: {retrieval_q}")
+    if result.get("sources"):
+        st.markdown(
+            f'<div class="citation-summary">Trich dan: {citation_labels(result["sources"])}</div>',
+            unsafe_allow_html=True,
+        )
+        for src in result["sources"]:
+            render_source_expander(src)
+
+
+def render_corag_result(result: dict, question_text: str | None = None) -> None:
+    lat = result.get("meta", {}).get("latency", "â€”")
+    sub_qs = result.get("sub_questions", [])
+    sub_html = ""
+    if sub_qs:
+        chips = "".join(f'<span class="subq-chip">{q}</span>' for q in sub_qs)
+        sub_html = f'<div style="margin-bottom:8px;">{chips}</div>'
+
+    st.markdown(
+        f'<div class="corag-box">'
+        f'<div class="corag-header">CoRAG &nbsp;'
+        f'<span style="font-weight:400;font-size:0.85em;">({lat}s)</span></div>'
+        f'{sub_html}'
+        f'{result.get("answer","â€”")}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    retrieval_q = result.get("meta", {}).get("retrieval_question")
+    if question_text and retrieval_q and retrieval_q != question_text:
+        st.caption(f"Cau hoi doc lap: {retrieval_q}")
+    if result.get("sources"):
+        st.markdown(
+            f'<div class="citation-summary">Trich dan: {citation_labels(result["sources"])}</div>',
+            unsafe_allow_html=True,
+        )
+        for src in result["sources"]:
+            render_source_expander(src)
+
+
 def run_chunk_strategy_evaluation(uploaded_eval_files) -> tuple[list[dict], str]:
     temp_paths = []
     display_names = []
@@ -529,6 +597,20 @@ with st.sidebar:
     st.markdown("**Model:** `qwen2.5:1.7b`")
     st.markdown("**Embedding:** `MPNet 768-dim`")
     st.markdown("**Retriever:** Hybrid (FAISS + BM25)")
+
+    st.session_state.conversational_rag = st.toggle(
+        "Conversational RAG",
+        value=st.session_state.conversational_rag,
+        help="Rewrite cau hoi tiep noi bang ngu canh hoi thoai truoc khi retrieve.",
+    )
+    if not hasattr(st.session_state.rag, "get_conversation_memory"):
+        st.session_state.rag = RAGChain()
+        st.session_state.index_ready = st.session_state.rag.load_from_disk_and_build()
+    memory_turns = len(st.session_state.rag.get_conversation_memory())
+    st.caption(f"Bo nho hoi thoai: {memory_turns} luot")
+    if st.button("Xoa ngu canh hoi thoai", use_container_width=True):
+        st.session_state.rag.clear_conversation_memory()
+        st.rerun()
 
     st.session_state.chunk_size = st.selectbox(
         "Chunk size:",
@@ -819,13 +901,44 @@ if question:
         doc_filter = DocumentFilter(sources=[st.session_state.filter_source])
 
     rag_chain = st.session_state.rag
+    if not hasattr(rag_chain, "add_conversation_turn"):
+        rag_chain = RAGChain()
+        st.session_state.rag = rag_chain
+        st.session_state.index_ready = rag_chain.load_from_disk_and_build()
+
+    st.markdown(
+        f'<div class="user-bubble">{question}</div>',
+        unsafe_allow_html=True,
+    )
+    live_rag_col, live_corag_col = st.columns(2)
+    with live_corag_col:
+        st.info("CoRAG se chay sau khi RAG co ket qua.")
 
     # Chạy TUẦN TỰ: RAG trước, CoRAG sau — đo thời gian chính xác từng bước
     with st.spinner("Đang chạy RAG..."):
-        result_rag = rag_chain.ask_rag(question, doc_filter, save_history=True)
+        result_rag = rag_chain.ask_rag(
+            question,
+            doc_filter,
+            save_history=True,
+            use_conversation=st.session_state.conversational_rag,
+        )
  
     with st.spinner("Đang chạy CoRAG (decompose → retrieve → synthesize)..."):
-        result_corag = rag_chain.ask_corag(question, doc_filter, save_history=True)
+        with live_rag_col:
+            render_rag_result(result_rag, question)
+
+        result_corag = rag_chain.ask_corag(
+            question,
+            doc_filter,
+            save_history=True,
+            use_conversation=st.session_state.conversational_rag,
+        )
+
+    with live_corag_col:
+        render_corag_result(result_corag, question)
+
+    if st.session_state.conversational_rag:
+        rag_chain.add_conversation_turn(question, result_rag.get("answer", ""))
  
     st.session_state.chat_history.append({
         "question": question,

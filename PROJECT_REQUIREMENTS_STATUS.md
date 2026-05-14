@@ -13,7 +13,7 @@ Ngay lap: 2026-05-14
 | 3 | Nut xoa lich su/vector store | Hoan thanh co ban | Da co xac nhan truoc khi xoa va reset index xoa that FAISS tren disk |
 | 4 | Cai thien chunk strategy | Gan hoan thanh | Da co UI/API tuy chinh chunk params va script tao bao cao so sanh |
 | 5 | Citation/source tracking | Mot phan | Co source/page/content, thieu click xem context goc va highlight |
-| 6 | Conversational RAG | Chua hoan thanh | Co history/prompt condense, nhung chua dung memory trong pipeline |
+| 6 | Conversational RAG | Hoan thanh co ban | Co memory theo session, rewrite follow-up truoc retrieval, UI bat/tat va reset ngu canh |
 | 7 | Hybrid search | Mot phan/gan hoan thanh | Da co FAISS + BM25 + RRF, thieu benchmark voi vector search |
 | 8 | Multi-document RAG + metadata filtering | Mot phan/gan hoan thanh | Da upload nhieu file va filter source, thieu filter UI theo type/date |
 | 9 | Re-ranking voi Cross-Encoder | Chua co | Chua implement reranker |
@@ -111,13 +111,16 @@ Ngay lap: 2026-05-14
 
 - Co luu chat history.
 - `PromptBuilder` co `get_condense_question_prompt()`.
+- `RAGChain` co memory hoi thoai theo session.
+- RAG/CoRAG rewrite follow-up question thanh standalone question truoc retrieval khi bat Conversational RAG.
+- Prompt tra loi nhan them conversation history de hieu cau hoi tiep noi.
+- UI co toggle `Conversational RAG`, hien so luot memory va nut xoa ngu canh hoi thoai.
 
 **Con thieu / can lam**
 
-- Pipeline RAG chua truyen history vao LLM.
-- Chua rewrite follow-up question thanh standalone question truoc retrieval.
-- Chua co memory object/chat history theo session.
-- Chua co UI de hoi tiep dua tren ngu canh hoi thoai cu.
+- Memory moi luu trong session Streamlit hien tai, chua persist/rang buoc theo user.
+- Chat history JSON van la log hoi dap, chua dung lam memory tu dong khi mo lai app.
+- Chua co UI hien thi day du rewritten standalone question trong moi turn.
 
 ### 7. Them hybrid search
 
