@@ -8,11 +8,13 @@ from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-def _load_docx(file_path: Path):
-	"""Load a DOCX file into a list of LangChain Document objects."""
-	# DOCX parsing with python-docx.
+
+def _extract_docx_text(file_path: Path) -> str:
+	"""Extract DOCX text while preserving paragraph/table order."""
 	try:
 		import docx  # python-docx
+		from docx.table import Table
+		from docx.text.paragraph import Paragraph
 	except ImportError as exc:
 		raise ImportError(
 			"DOCX support requires 'python-docx'. "
@@ -22,20 +24,29 @@ def _load_docx(file_path: Path):
 	doc = docx.Document(str(file_path))
 	parts = []
 
-	for paragraph in doc.paragraphs:
-		text = (paragraph.text or "").strip()
-		if text:
-			parts.append(text)
+	for child in doc.element.body.iterchildren():
+		if child.tag.endswith("}p"):
+			paragraph = Paragraph(child, doc)
+			text = (paragraph.text or "").strip()
+			if text:
+				parts.append(text)
+		elif child.tag.endswith("}tbl"):
+			table = Table(child, doc)
+			for row in table.rows:
+				cells = [" ".join((cell.text or "").split()) for cell in row.cells]
+				cells = [cell for cell in cells if cell]
+				if cells:
+					parts.append(" | ".join(cells))
 
-	for table in doc.tables:
-		for row in table.rows:
-			cells = [(cell.text or "").strip() for cell in row.cells]
-			cells = [cell for cell in cells if cell]
-			if cells:
-				parts.append("\t".join(cells))
+	return "\n".join(parts).strip()
 
-	content = "\n".join(parts).strip()
-	return [Document(page_content=content, metadata={"source": str(file_path)})]
+
+def _load_docx(file_path: Path):
+	"""Load a DOCX file into a list of LangChain Document objects."""
+	content = _extract_docx_text(file_path)
+	if not content:
+		raise ValueError(f"No extractable text found in DOCX file: {file_path}")
+	return [Document(page_content=content, metadata={"source": str(file_path), "page": None})]
 
 
 def load_document(file_paths):
@@ -77,6 +88,13 @@ def load_document(file_paths):
 
 def split_text(documents, chunk_size=1000, chunk_overlap=100):
 	"""Split documents while preserving source metadata in every chunk."""
+	if chunk_size <= 0:
+		raise ValueError("chunk_size must be greater than 0")
+	if chunk_overlap < 0:
+		raise ValueError("chunk_overlap must be greater than or equal to 0")
+	if chunk_overlap >= chunk_size:
+		raise ValueError("chunk_overlap must be smaller than chunk_size")
+
 	text_splitter = RecursiveCharacterTextSplitter(
 		chunk_size=chunk_size,
 		chunk_overlap=chunk_overlap,
@@ -85,6 +103,12 @@ def split_text(documents, chunk_size=1000, chunk_overlap=100):
 	chunks = []
 	for document in documents:
 		base_metadata = dict(document.metadata or {})
+		base_metadata.update(
+			{
+				"chunk_size": chunk_size,
+				"chunk_overlap": chunk_overlap,
+			}
+		)
 		for chunk_text in text_splitter.split_text(document.page_content):
 			chunks.append(Document(page_content=chunk_text, metadata=dict(base_metadata)))
 

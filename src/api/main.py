@@ -2,15 +2,21 @@ from contextlib import asynccontextmanager
 import asyncio
 from pathlib import Path
 import uuid
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel, Field
-
 from src.backend.llm import get_llm
 from src.backend.prompt_builder import PromptBuilder
 from src.backend.rag_service import RagService
 from src.backend.retriever import HybridRetriever, KeywordRetriever, SemanticRetriever
-from src.backend.vector_store import INDEX_DIR, build_vector_store, load_vector_store, save_vector_store 
+from src.backend.vector_store import (
+    INDEX_DIR,
+    build_vector_store,
+    delete_vector_store,
+    index_exists,
+    load_vector_store,
+    save_vector_store,
+)
 from src.processor import process_multiple_documents
 from datetime import datetime
 from src.backend.history_store import add_entry, get_all_history, get_by_id, clear
@@ -49,9 +55,12 @@ class UploadResponse(BaseModel):
     message: str
     files: list[str] = Field(default_factory=list)
     chunk_count: int = 0
+    chunk_size: int = 1000
+    chunk_overlap: int = 100
     total_indexed: int = 0 # tong so file da duoc index
 
 class HistoryEntry(BaseModel):
+    id: int | None = None
     question: str
     answer: str
     timestamp: str
@@ -102,8 +111,18 @@ def resolve_upload_path(filename: str) -> Path:
 
 
 
-def rebuild_index(file_paths: list[str], llm, prompt_builder):
-    chunks = process_multiple_documents(file_paths)
+def rebuild_index(
+    file_paths: list[str],
+    llm,
+    prompt_builder,
+    chunk_size: int = 1000,
+    chunk_overlap: int = 100,
+):
+    chunks = process_multiple_documents(
+        file_paths,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+    )
     vector_store = build_vector_store(chunks)
     save_vector_store(vector_store)
     rag_service = build_rag_service(vector_store, llm, prompt_builder)
@@ -118,7 +137,7 @@ async def lifespan(app: FastAPI):
     app.state.index_lock = asyncio.Lock()
 
     try:
-        if INDEX_DIR.exists():
+        if index_exists(INDEX_DIR):
             vector_store = load_vector_store()
             app.state.rag_service = build_rag_service(
                 vector_store,
@@ -218,15 +237,26 @@ def health():
     return {
         "status": "ok",
         "rag_ready": app.state.rag_service is not None,
-        "indexed": INDEX_DIR.exists(),
+        "indexed": index_exists(INDEX_DIR),
         "uploaded_files": len(collect_uploaded_files()),
     }
 
 @app.post("/upload", response_model=UploadResponse)
-async def upload(files: list[UploadFile] = File(...)):
+async def upload(
+    files: list[UploadFile] = File(...),
+    chunk_size: int = Form(1000),
+    chunk_overlap: int = Form(100),
+):
 
     if not files:
         raise HTTPException(400, "Không có file nào được gửi lên.")
+
+    if chunk_size <= 0:
+        raise HTTPException(400, "chunk_size must be greater than 0.")
+    if chunk_overlap < 0:
+        raise HTTPException(400, "chunk_overlap must be greater than or equal to 0.")
+    if chunk_overlap >= chunk_size:
+        raise HTTPException(400, "chunk_overlap must be smaller than chunk_size.")
 
     saved: list[str] = []
     skipped: list[str] = []
@@ -264,6 +294,8 @@ async def upload(files: list[UploadFile] = File(...)):
             all_files,
             app.state.llm,
             app.state.prompt_builder,
+            chunk_size,
+            chunk_overlap,
         )
         app.state.rag_service = rag_service
 
@@ -275,6 +307,8 @@ async def upload(files: list[UploadFile] = File(...)):
         files=[Path(p).name for p in saved],
         skipped=skipped,
         chunk_count=chunk_count,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
         total_indexed=len(all_indexed),
     )
 
@@ -328,15 +362,29 @@ async def delete_document(filename: str):
         else:
             # Không còn file nào → xóa index
             app.state.rag_service = None
-            if INDEX_DIR.exists():
-                import shutil
-                shutil.rmtree(INDEX_DIR)
+            delete_vector_store()
             chunk_count = 0
 
     return {
         "message": f"Đã xóa '{filename}' và reindex.",
         "remaining_files": len(collect_uploaded_files()),
         "chunk_count": chunk_count,
+    }
+
+
+@app.delete("/documents")
+async def clear_documents():
+    """Xoa toan bo uploaded documents va persisted vector index."""
+    async with app.state.index_lock:
+        for path in collect_uploaded_files():
+            path.unlink()
+        app.state.rag_service = None
+        delete_vector_store()
+
+    return {
+        "message": "All uploaded documents and vector index were cleared.",
+        "remaining_files": 0,
+        "indexed": False,
     }
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Iterable
 
@@ -13,6 +14,16 @@ from src.backend.llm import get_llm
 from src.processor import get_embedding_model
 
 INDEX_DIR = Path("src/faiss_index")
+
+
+def index_exists(index_dir: Path | str = INDEX_DIR) -> bool:
+    """Return True when a persisted FAISS index is available."""
+    index_path = Path(index_dir)
+    return (
+        index_path.exists()
+        and (index_path / "index.faiss").exists()
+        and (index_path / "index.pkl").exists()
+    )
 
 
 def build_vector_store(documents: Iterable[Document]) -> FAISS:
@@ -32,12 +43,21 @@ def save_vector_store(vector_store: FAISS, index_dir: Path | str = INDEX_DIR) ->
 def load_vector_store(index_dir: Path | str = INDEX_DIR) -> FAISS:
     """Load a previously saved FAISS index from disk."""
     index_path = Path(index_dir)
+    if not index_exists(index_path):
+        raise FileNotFoundError(f"FAISS index not found in: {index_path}")
     embeddings = get_embedding_model()
     return FAISS.load_local(
         str(index_path),
         embeddings,
         allow_dangerous_deserialization=True,
     )
+
+
+def delete_vector_store(index_dir: Path | str = INDEX_DIR) -> None:
+    """Remove the persisted FAISS index from disk."""
+    index_path = Path(index_dir)
+    if index_path.exists():
+        shutil.rmtree(index_path)
 
 
 def similarity_search(query: str, k: int = 4, index_dir: Path | str = INDEX_DIR) -> list[Document]:
