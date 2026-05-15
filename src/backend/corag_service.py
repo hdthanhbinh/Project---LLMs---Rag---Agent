@@ -1,13 +1,10 @@
 # src/backend/corag_service.py
 #
 # CoRAG = Chain-of-Thought RAG
-# Ý tưởng: thay vì chỉ retrieve 1 lần rồi generate,
-# CoRAG lặp lại quá trình: sinh sub-questions → retrieve → tổng hợp.
-#
-# Luồng:
-#   1. Decompose: LLM phân tách câu hỏi gốc thành 2-3 sub-questions
-#   2. Retrieve:  với MỖI sub-question, chạy HybridRetriever độc lập
-#   3. Synthesize: gộp tất cả context tìm được → LLM sinh câu trả lời cuối
+# Flow:
+#   1. Decompose: LLM breaks the question into 2-3 sub-questions
+#   2. Retrieve:  run HybridRetriever independently for each sub-question
+#   3. Synthesize: merge all context → LLM produces final answer
 
 from typing import Any
 import time
@@ -16,15 +13,19 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 
 class CoRAGService:
-    MAX_SUB_QUESTIONS   = 3      # tối đa bao nhiêu sub-question
-    MAX_CONTEXT_PER_DOC = 800    # ký tự tối đa mỗi chunk
-    MAX_CONTEXT_TOTAL   = 4000   # ký tự tối đa tổng context
+    MAX_SUB_QUESTIONS   = 3
+    MAX_CONTEXT_PER_DOC = 800
+    MAX_CONTEXT_TOTAL   = 4000
 
     def __init__(self, llm, prompt_builder, retrieve, k: int = 3):
         self.llm            = llm
         self.prompt_builder = prompt_builder
         self.retrieve       = retrieve
         self.k              = k
+
+    # ------------------------------------------------------------------ #
+    #  Utilities                                                           #
+    # ------------------------------------------------------------------ #
 
     def compact_text(self, text: str, limit: int) -> str:
         compact = " ".join((text or "").split())
@@ -38,11 +39,10 @@ class CoRAGService:
     def format_history(self, chat_history: list[dict[str, str]] | None) -> str:
         if not chat_history:
             return "No prior conversation."
-
         lines = []
         for turn in chat_history[-6:]:
-            user_text = self.compact_text(turn.get("question", ""), 300)
-            answer_text = self.compact_text(turn.get("answer", ""), 500)
+            user_text   = self.compact_text(turn.get("question", ""), 300)
+            answer_text = self.compact_text(turn.get("answer",   ""), 500)
             lines.append(f"User: {user_text}\nAssistant: {answer_text}")
         return "\n\n".join(lines) if lines else "No prior conversation."
 
@@ -50,12 +50,30 @@ class CoRAGService:
         messages = []
         for turn in (chat_history or [])[-6:]:
             question = (turn.get("question") or "").strip()
-            answer = (turn.get("answer") or "").strip()
+            answer   = (turn.get("answer")   or "").strip()
             if question:
                 messages.append(HumanMessage(content=question))
             if answer:
                 messages.append(AIMessage(content=answer))
         return messages
+
+    def _get_rerank_meta(self) -> dict:
+        """
+        Read last_rerank_info from the retriever if available.
+        Aggregates across multiple retrieve() calls by taking the max latency
+        and the total candidate_count.
+        """
+        info = getattr(self.retrieve, "last_rerank_info", {}) or {}
+        return {
+            "rerank_enabled":  info.get("rerank_enabled", False),
+            "rerank_model":    info.get("rerank_model"),
+            "rerank_latency":  info.get("rerank_latency", 0.0),
+            "candidate_count": info.get("candidate_count", 0),
+        }
+
+    # ------------------------------------------------------------------ #
+    #  Step 0: Rewrite question                                            #
+    # ------------------------------------------------------------------ #
 
     def rewrite_question(
         self,
@@ -64,14 +82,11 @@ class CoRAGService:
     ) -> str:
         if not chat_history:
             return question
-
         prompt_template = self.prompt_builder.get_condense_question_prompt()
-        prompt = prompt_template.invoke(
-            {
-                "chat_history": self._history_messages(chat_history),
-                "question": question,
-            }
-        )
+        prompt = prompt_template.invoke({
+            "chat_history": self._history_messages(chat_history),
+            "question": question,
+        })
         try:
             response = self.llm.invoke(prompt)
             rewritten = getattr(response, "content", str(response)).strip()
@@ -81,13 +96,10 @@ class CoRAGService:
             return question
 
     # ------------------------------------------------------------------ #
-    #  Bước 1: Decompose câu hỏi thành sub-questions                       #
+    #  Step 1: Decompose                                                   #
     # ------------------------------------------------------------------ #
+
     def decompose(self, question: str) -> list[str]:
-        """
-        Dùng LLM để tách câu hỏi gốc thành các sub-questions nhỏ hơn.
-        Nếu LLM lỗi hoặc chỉ có 1 ý, trả về [question] gốc.
-        """
         decompose_prompt = (
             "You are a query decomposition assistant.\n"
             "Break the following question into 2-3 specific sub-questions "
@@ -99,40 +111,51 @@ class CoRAGService:
         try:
             response = self.llm.invoke(decompose_prompt)
             text = getattr(response, "content", str(response)).strip()
-
-            # Parse numbered list: "1. ...", "2. ..." hoặc "- ..."
             lines = text.splitlines()
             sub_qs = []
             for line in lines:
                 line = line.strip()
                 if not line:
                     continue
-                # Bỏ số đầu dòng "1.", "2." hoặc dấu "-"
                 cleaned = re.sub(r"^[\d]+[.)]\s*|^[-*]\s*", "", line).strip()
                 if cleaned and len(cleaned) > 5:
                     sub_qs.append(cleaned)
-
-            # Giới hạn số sub-questions và fallback
-            sub_qs = sub_qs[:self.MAX_SUB_QUESTIONS]
+            sub_qs = sub_qs[: self.MAX_SUB_QUESTIONS]
             return sub_qs if sub_qs else [question]
-
-        except Exception as e:
-            print(f"CoRAG decompose warning: {e}")
+        except Exception as exc:
+            print(f"CoRAG decompose warning: {exc}")
             return [question]
 
     # ------------------------------------------------------------------ #
-    #  Bước 2: Retrieve cho từng sub-question                              #
+    #  Step 2: Retrieve for each sub-question                              #
     # ------------------------------------------------------------------ #
+
     def retrieve_all(self, sub_questions: list[str], filter=None) -> list:
         """
-        Chạy retriever cho mỗi sub-question, gộp kết quả, dedup theo key.
+        Run retriever for each sub-question, merge and deduplicate.
+        Accumulates rerank_info across calls (max latency, total candidates).
         """
-        seen_keys = set()
-        all_docs  = []
+        seen_keys: set = set()
+        all_docs: list = []
+
+        # Accumulators for rerank meta across sub-question retrieves
+        any_reranked = False
+        total_latency = 0.0
+        total_candidates = 0
+        last_model = None
 
         for sq in sub_questions:
             try:
                 docs = self.retrieve.retrieve(sq, filter=filter)
+
+                # Collect rerank info for this call
+                info = getattr(self.retrieve, "last_rerank_info", {}) or {}
+                if info.get("rerank_enabled"):
+                    any_reranked = True
+                    total_latency += info.get("rerank_latency", 0.0)
+                    total_candidates += info.get("candidate_count", 0)
+                    last_model = info.get("rerank_model")
+
                 for doc in docs:
                     key = (
                         doc.metadata.get("source", ""),
@@ -142,14 +165,24 @@ class CoRAGService:
                     if key not in seen_keys:
                         seen_keys.add(key)
                         all_docs.append(doc)
-            except Exception as e:
-                print(f"CoRAG retrieve warning for '{sq}': {e}")
+            except Exception as exc:
+                print(f"CoRAG retrieve warning for '{sq}': {exc}")
+
+        # Store aggregated rerank info back on the retriever so
+        # _get_rerank_meta() returns the right aggregated numbers.
+        self.retrieve.last_rerank_info = {
+            "rerank_enabled":  any_reranked,
+            "rerank_model":    last_model,
+            "rerank_latency":  round(total_latency, 3),
+            "candidate_count": total_candidates,
+        }
 
         return all_docs
 
     # ------------------------------------------------------------------ #
-    #  Format context có ghi rõ sub-question nào tìm ra chunk nào          #
+    #  Context / source helpers                                            #
     # ------------------------------------------------------------------ #
+
     def format_context(self, docs: list) -> str:
         return self.prompt_builder.format_citation_context(
             docs,
@@ -158,22 +191,14 @@ class CoRAGService:
         )
 
     def _page_label(self, metadata: dict[str, Any]) -> str:
-        """Unified page formatting: 0-indexed PDF → 1-indexed display, DOCX → N/A"""
         file_type = str(metadata.get("file_type", "")).lstrip(".").lower()
         page = metadata.get("page")
-
-        # DOCX files don't have page numbers
         if file_type == "docx":
             return "N/A"
-        
-        # For PDF, page is 0-indexed from PDFPlumberLoader; convert to 1-indexed for display
         if page is None or page == "":
             return "N/A"
-        
         try:
-            page_num = int(page)
-            # Convert 0-indexed to 1-indexed for display
-            return str(page_num + 1)
+            return str(int(page) + 1)
         except (TypeError, ValueError):
             return "N/A"
 
@@ -181,33 +206,30 @@ class CoRAGService:
         sources = []
         for i, doc in enumerate(docs, 1):
             metadata = doc.metadata or {}
-            page_label = self._page_label(metadata)
-
             sources.append({
-                "index":   i,
-                "source":  metadata.get("source", "unknown"),
-                "page":    page_label,
+                "index":       i,
+                "source":      metadata.get("source", "unknown"),
+                "page":        self._page_label(metadata),
                 "page_number": metadata.get("page"),
-                "file_type": metadata.get("file_type"),
+                "file_type":   metadata.get("file_type"),
                 "source_path": metadata.get("source_path"),
-                "chunk_id": metadata.get("chunk_id"),
+                "chunk_id":    metadata.get("chunk_id"),
                 "chunk_index": metadata.get("chunk_index"),
-                "char_start": metadata.get("char_start"),
-                "char_end": metadata.get("char_end"),
-                "content": doc.page_content,
+                "char_start":  metadata.get("char_start"),
+                "char_end":    metadata.get("char_end"),
+                "content":     doc.page_content,
             })
         return sources
 
-    def _append_citations_if_missing(self, answer_text: str, sources: list[dict[str, Any]]) -> str:
+    def _append_citations_if_missing(
+        self, answer_text: str, sources: list[dict[str, Any]]
+    ) -> str:
         if not sources:
             return answer_text
-
         if "Tôi không tìm thấy thông tin phù hợp" in (answer_text or ""):
             return answer_text
-
         if re.search(r"\[(\d+)\]", answer_text or ""):
             return answer_text
-
         citation_list = ", ".join(f"[{src['index']}]" for src in sources)
         stripped = (answer_text or "").rstrip()
         if not stripped:
@@ -217,8 +239,9 @@ class CoRAGService:
         return f"{stripped}. Nguồn tham khảo: {citation_list}."
 
     # ------------------------------------------------------------------ #
-    #  Bước 3: Synthesize — sinh câu trả lời cuối từ toàn bộ context       #
+    #  Step 3: Synthesize                                                  #
     # ------------------------------------------------------------------ #
+
     def synthesize(
         self,
         question: str,
@@ -228,7 +251,6 @@ class CoRAGService:
         retrieval_question: str | None = None,
     ) -> str:
         context = self.format_context(docs)
-
         sub_q_text = "\n".join(f"- {q}" for q in sub_questions)
 
         synthesize_prompt = (
@@ -247,21 +269,20 @@ class CoRAGService:
             "- Use the conversation history only to understand follow-up intent.\n"
             "- DO NOT mention '[Doc X]' or any internal reference labels in your answer.\n"
             "- If you cannot answer based on the context, say: 'Tôi không tìm thấy thông tin phù hợp.'\n"
-            "- Citations are mandatory: use markers like [1], [2] that match the numbered references in the context.\n"
             "- Every factual claim from the context should include at least one citation marker.\n"
             "- Be concise and clear.\n\n"
             "Answer:"
         )
-
         try:
             response = self.llm.invoke(synthesize_prompt)
             return getattr(response, "content", str(response)).strip()
-        except Exception as e:
-            return f"Lỗi sinh câu trả lời: {e}"
+        except Exception as exc:
+            return f"Lỗi sinh câu trả lời: {exc}"
 
     # ------------------------------------------------------------------ #
     #  Main entry point                                                    #
     # ------------------------------------------------------------------ #
+
     def answer(
         self,
         question: str,
@@ -278,18 +299,23 @@ class CoRAGService:
                 "answer":        "",
                 "sources":       [],
                 "sub_questions": [],
-                "meta":          {"latency": 0.0, "model": getattr(self.llm, "model", "unknown"), "method": "corag"},
+                "meta":          {
+                    "latency": 0.0,
+                    "model": getattr(self.llm, "model", "unknown"),
+                    "method": "corag",
+                },
             }
 
-        # Bước 1: Decompose
+        # Step 0: rewrite
         retrieval_question = (
             self.rewrite_question(question, chat_history)
             if rewrite_query else question
         )
 
+        # Step 1: decompose
         sub_questions = self.decompose(retrieval_question)
 
-        # Bước 2: Retrieve cho mỗi sub-question
+        # Step 2: retrieve for each sub-question
         docs = self.retrieve_all(sub_questions, filter=filter)
 
         if not docs:
@@ -298,37 +324,39 @@ class CoRAGService:
                 "answer":        "Tôi không tìm thấy thông tin phù hợp.",
                 "sources":       [],
                 "sub_questions": sub_questions,
-                "meta":          {
+                "meta": {
                     "latency": round(time.time() - start, 2),
                     "model":   getattr(self.llm, "model", "unknown"),
                     "method":  "corag",
                     "retrieval_question": retrieval_question,
                     "conversation_turns": len(chat_history or []),
+                    **self._get_rerank_meta(),
                 },
             }
 
-        # Bước 3: Synthesize
+        # Step 3: synthesize
         answer_text = self.synthesize(
-            question,
-            sub_questions,
-            docs,
+            question, sub_questions, docs,
             chat_history=chat_history,
             retrieval_question=retrieval_question,
         )
-        answer_text = self._append_citations_if_missing(answer_text, self.build_sources(docs))
+        answer_text = self._append_citations_if_missing(
+            answer_text, self.build_sources(docs)
+        )
 
         return {
             "question":      question,
             "answer":        answer_text,
             "sources":       self.build_sources(docs),
-            "sub_questions": sub_questions,   # để UI hiển thị bước phân tích
+            "sub_questions": sub_questions,
             "meta": {
-                "latency": round(time.time() - start, 2),
-                "model":   getattr(self.llm, "model", "unknown"),
-                "method":  "corag",
-                "num_sub": len(sub_questions),
-                "num_docs": len(docs),
-                "retrieval_question": retrieval_question,
-                "conversation_turns": len(chat_history or []),
+                "latency":    round(time.time() - start, 2),
+                "model":      getattr(self.llm, "model", "unknown"),
+                "method":     "corag",
+                "num_sub":    len(sub_questions),
+                "num_docs":   len(docs),
+                "retrieval_question":  retrieval_question,
+                "conversation_turns":  len(chat_history or []),
+                **self._get_rerank_meta(),
             },
         }

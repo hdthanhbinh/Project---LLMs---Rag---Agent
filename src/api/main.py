@@ -323,25 +323,68 @@ async def upload(
 @app.get("/documents", response_model=DocumentListResponse)
 def list_documents():
     """
-    Liệt kê tất cả file đã upload.
-    Dùng field 'name' để truyền vào filter.sources khi /ask.
+    Liệt kê tất cả file đã upload với metadata.
+    Metadata được lấy từ chunks trong vector store (chính xác hơn).
     """
-    files = collect_uploaded_files()
-    docs = []
-    for f in files:
-        # Lấy original name: bỏ timestamp và uuid suffix
-        # Tên file: {stem}_{timestamp}_{uuid}{suffix}
-        parts = f.stem.rsplit("_", 2)
-        original_stem = parts[0] if len(parts) == 3 else f.stem
-        docs.append(DocumentInfo(
-            name=f.name,
-            original_name=original_stem + f.suffix,
-            file_type=f.suffix.lstrip("."),
-            size_kb=round(f.stat().st_size / 1024, 1),
-            date_uploaded=datetime.fromtimestamp(
-                f.stat().st_mtime
-            ).isoformat(),
-        ))
+    if app.state.rag_service is None:
+        return DocumentListResponse(total=0, documents=[])
+    
+    # Lấy metadata từ chunks trong vector store
+    documents_metadata = {}
+    try:
+        chunks = list(app.state.rag_service.retriever.semantic_retriever.vector_store.docstore._dict.values())
+        for chunk in chunks:
+            meta = chunk.metadata or {}
+            source = meta.get("source")
+            if source and source not in documents_metadata:
+                documents_metadata[source] = {
+                    "source": source,
+                    "file_type": meta.get("file_type", "").lstrip("."),
+                    "date_uploaded": meta.get("date_uploaded", ""),
+                    "source_path": meta.get("source_path", ""),
+                }
+    except Exception as e:
+        print(f"Error reading chunks metadata: {e}")
+    
+    # Fallback: if no metadata from chunks, use uploaded files list
+    if not documents_metadata:
+        files = collect_uploaded_files()
+        for f in files:
+            # Lấy original name: bỏ timestamp và uuid suffix
+            # Tên file: {stem}_{timestamp}_{uuid}{suffix}
+            parts = f.stem.rsplit("_", 2)
+            original_stem = parts[0] if len(parts) == 3 else f.stem
+            original_name = original_stem + f.suffix
+            
+            documents_metadata[original_name] = {
+                "source": original_name,
+                "file_type": f.suffix.lstrip("."),
+                "date_uploaded": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
+                "source_path": str(f.resolve()),
+            }
+    
+    # Convert to list and sort
+    docs = [
+        DocumentInfo(
+            name=meta["source"],
+            original_name=meta["source"],
+            file_type=meta.get("file_type", ""),
+            size_kb=0.0,  # Will be updated below if file exists
+            date_uploaded=meta.get("date_uploaded", ""),
+        )
+        for meta in sorted(documents_metadata.values(), key=lambda x: x.get("source", ""))
+    ]
+    
+    # Try to get file size
+    for doc_info in docs:
+        try:
+            for file_path in collect_uploaded_files():
+                if file_path.name == doc_info.name or doc_info.name in str(file_path):
+                    doc_info.size_kb = round(file_path.stat().st_size / 1024, 1)
+                    break
+        except Exception:
+            pass
+    
     return DocumentListResponse(total=len(docs), documents=docs)
 
 
@@ -393,5 +436,3 @@ async def clear_documents():
         "remaining_files": 0,
         "indexed": False,
     }
-
-
